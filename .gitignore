@@ -1,0 +1,11 @@
+# Local development and private runtime material are never published.
+private/
+release/
+node_modules/
+.env
+.env.*
+*.log
+*.trace
+*.har
+__pycache__/
+*.pyc

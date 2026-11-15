@@ -1,0 +1,14 @@
+{
+  "display_name": "清酌 TavernFlow",
+  "loading_order": -100,
+  "js": "index.js",
+  "css": "style.css",
+  "author": "Susuzi",
+  "version": "0.3.0",
+  "minimum_client_version": "1.19.0",
+  "auto_update": false,
+  "hooks": {
+    "enable": "enable",
+    "disable": "disable"
+  }
+}

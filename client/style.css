@@ -1,0 +1,20 @@
+#tf-panel{--tf-accent:var(--SmartThemeQuoteColor,#c4a776);font:inherit;color:var(--SmartThemeBodyColor,inherit)}
+#tf-panel .tf-shell{border:1px solid var(--SmartThemeBorderColor,#7775);border-radius:10px;background:var(--SmartThemeBlurTintColor,#2224);overflow:hidden}
+#tf-panel summary{cursor:pointer;list-style:none}#tf-panel summary::-webkit-details-marker{display:none}
+#tf-panel .tf-shell>summary{display:flex;align-items:center;gap:12px;padding:14px 16px}
+#tf-panel .tf-mark{display:grid;place-items:center;width:36px;height:36px;flex:none;border:1px solid var(--tf-accent);border-radius:50%;color:var(--tf-accent);font-family:serif;font-size:22px}
+#tf-panel b{font-size:18px;letter-spacing:.12em}#tf-panel small{display:block;font-size:11px;opacity:.65;margin-top:3px;letter-spacing:.02em}
+#tf-panel .tf-state{margin-left:auto;font-size:12px;color:var(--tf-accent);white-space:nowrap}
+#tf-panel .tf-body{padding:0 16px 16px}#tf-panel p{margin:0 0 14px;font-size:12px;line-height:1.7}
+#tf-panel .tf-intro{opacity:.8}#tf-panel .tf-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:14px 0;border-block:1px solid var(--SmartThemeBorderColor,#7775);margin-bottom:12px}
+#tf-panel .tf-metrics strong{display:block;font-size:19px;font-weight:500;font-variant-numeric:tabular-nums;color:var(--tf-accent)}
+#tf-panel .tf-metrics span{display:block;font-size:10px;opacity:.7;margin-top:4px}#tf-panel .tf-switch{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:40px;font-size:13px;cursor:pointer}
+#tf-panel .tf-switch input{margin:0;accent-color:var(--tf-accent);min-width:18px;min-height:18px}
+#tf-panel .tf-notice{padding:10px 12px;margin-bottom:12px;border-left:2px solid var(--tf-accent);background:#8881;font-size:12px;line-height:1.7;overflow-wrap:anywhere}
+#tf-panel .tf-note{opacity:.65;margin-top:12px}#tf-panel .tf-diagnostics{font-size:12px;border-top:1px solid var(--SmartThemeBorderColor,#7775);padding-top:12px}
+#tf-panel .tf-diagnostics summary{opacity:.7}#tf-panel dl{display:grid;grid-template-columns:65px 1fr;gap:8px;margin:12px 0}#tf-panel dd{margin:0;overflow-wrap:anywhere;opacity:.75}
+#tf-panel .tf-version{text-align:right;margin-top:14px}#tf-panel :focus-visible{outline:2px solid var(--tf-accent);outline-offset:3px}
+@media(max-width:480px){#tf-panel .tf-shell>summary{padding:12px}#tf-panel .tf-body{padding:0 12px 12px}#tf-panel .tf-metrics strong{font-size:17px}}
+
+/* Only the host drawer's height transition; no jQuery/event/callback interception. */
+body.tf-quick-drawers .drawer-content{transition-duration:0s!important;animation:none!important}

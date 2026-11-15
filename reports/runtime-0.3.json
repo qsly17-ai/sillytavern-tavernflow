@@ -1,0 +1,413 @@
+{
+  "version": "0.3.0",
+  "host": "SillyTavern 1.19.0 (7e8663cd9)",
+  "helper": "4.12.1",
+  "browser": "Chromium desktop headless 1280x900; 390x844 layout check",
+  "scope": "same isolated host, all business plugins retained; sourceGuard only off/on",
+  "selectionWarmPairs": 2,
+  "selectionWarmMedianMs": {
+    "off": 8470.0,
+    "on": 2016.0
+  },
+  "rounds": [
+    {
+      "kind": "selection",
+      "on": false,
+      "ms": 12400,
+      "maxTask": 10143,
+      "maxGap": 10603,
+      "messages": 8,
+      "frames": 3,
+      "frameReady": [
+        true,
+        true,
+        true
+      ],
+      "markers": 0,
+      "sourceBytes": 2359547,
+      "variableLengths": [
+        1513,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        10123
+      ]
+    },
+    {
+      "kind": "selection",
+      "on": true,
+      "ms": 1918,
+      "maxTask": 845,
+      "maxGap": 913,
+      "messages": 8,
+      "frames": 3,
+      "frameReady": [
+        true,
+        true,
+        true
+      ],
+      "markers": 0,
+      "sourceBytes": 2359547,
+      "variableLengths": [
+        1513,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        10123
+      ]
+    },
+    {
+      "kind": "selection",
+      "on": false,
+      "ms": 8532,
+      "maxTask": 7177,
+      "maxGap": 7306,
+      "messages": 8,
+      "frames": 3,
+      "frameReady": [
+        true,
+        true,
+        true
+      ],
+      "markers": 0,
+      "sourceBytes": 2359547,
+      "variableLengths": [
+        1513,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        10123
+      ]
+    },
+    {
+      "kind": "selection",
+      "on": true,
+      "ms": 1901,
+      "maxTask": 841,
+      "maxGap": 893,
+      "messages": 8,
+      "frames": 3,
+      "frameReady": [
+        true,
+        true,
+        true
+      ],
+      "markers": 0,
+      "sourceBytes": 2359547,
+      "variableLengths": [
+        1513,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        10123
+      ]
+    },
+    {
+      "kind": "selection",
+      "on": false,
+      "ms": 8408,
+      "maxTask": 6828,
+      "maxGap": 6970,
+      "messages": 8,
+      "frames": 3,
+      "frameReady": [
+        true,
+        true,
+        true
+      ],
+      "markers": 0,
+      "sourceBytes": 2359547,
+      "variableLengths": [
+        1513,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        10123
+      ]
+    },
+    {
+      "kind": "selection",
+      "on": true,
+      "ms": 2131,
+      "maxTask": 1015,
+      "maxGap": 1080,
+      "messages": 8,
+      "frames": 3,
+      "frameReady": [
+        true,
+        true,
+        true
+      ],
+      "markers": 0,
+      "sourceBytes": 2359547,
+      "variableLengths": [
+        1513,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        10123
+      ]
+    },
+    {
+      "kind": "rerender",
+      "on": false,
+      "ms": 5293,
+      "maxTask": 218,
+      "maxGap": 3704,
+      "messages": 8,
+      "frames": 3,
+      "frameReady": [
+        true,
+        true,
+        true
+      ],
+      "markers": 0,
+      "sourceBytes": 2359547,
+      "variableLengths": [
+        1513,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        10123
+      ]
+    },
+    {
+      "kind": "rerender",
+      "on": true,
+      "ms": 790,
+      "maxTask": 64,
+      "maxGap": 601,
+      "messages": 8,
+      "frames": 3,
+      "frameReady": [
+        true,
+        true,
+        true
+      ],
+      "markers": 0,
+      "sourceBytes": 2359547,
+      "variableLengths": [
+        1513,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        10123
+      ]
+    },
+    {
+      "kind": "rerender",
+      "on": false,
+      "ms": 1328,
+      "maxTask": 142,
+      "maxGap": 581,
+      "messages": 8,
+      "frames": 3,
+      "frameReady": [
+        true,
+        true,
+        true
+      ],
+      "markers": 0,
+      "sourceBytes": 2359547,
+      "variableLengths": [
+        1513,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        10123
+      ]
+    },
+    {
+      "kind": "rerender",
+      "on": true,
+      "ms": 884,
+      "maxTask": 79,
+      "maxGap": 590,
+      "messages": 8,
+      "frames": 3,
+      "frameReady": [
+        true,
+        true,
+        true
+      ],
+      "markers": 0,
+      "sourceBytes": 2359547,
+      "variableLengths": [
+        1513,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        4517,
+        10123
+      ]
+    }
+  ],
+  "messageHashSameAllRounds": true,
+  "variablesSemanticEqualToProduction": true,
+  "variableHashNote": "Initial JSON key order differed. Full recursive object comparison and sorted canonical SHA match original production variables; no value changed.",
+  "pageErrors": 0,
+  "blockedGenerationRequestsDuringAB": 0,
+  "compatibilityReplays": [
+    {
+      "kind": "mvu-write-refresh",
+      "on": false,
+      "ms": 1003,
+      "parsedRetained": true,
+      "frames": 3,
+      "maxTask": 595,
+      "maxGap": 621
+    },
+    {
+      "kind": "mvu-write-refresh",
+      "on": true,
+      "ms": 1063,
+      "parsedRetained": true,
+      "frames": 3,
+      "maxTask": 78,
+      "maxGap": 849
+    },
+    {
+      "kind": "baibai-tag-equivalent-replay",
+      "on": false,
+      "ms": 2639,
+      "tagRetained": true,
+      "frames": 3,
+      "maxTask": 843,
+      "maxGap": 930
+    },
+    {
+      "kind": "baibai-tag-equivalent-replay",
+      "on": true,
+      "ms": 1672,
+      "tagRetained": true,
+      "frames": 3,
+      "maxTask": 739,
+      "maxGap": 1329
+    },
+    {
+      "kind": "tag-restore",
+      "on": true,
+      "ms": 1689,
+      "tagRetained": true,
+      "frames": 3,
+      "maxTask": 775,
+      "maxGap": 1362
+    }
+  ],
+  "compatibilityData": {
+    "variablesRestored": true,
+    "originalTargetRestoredAfterBrowserClosed": true,
+    "tagNormalization": "MESSAGE_EDITED consumers relocate StatusPlaceHolderImpl; raw byte equality after event replay was false. Source guard never writes chat. Exact isolated target file restored from unchanged production at test end.",
+    "markersRemaining": 0,
+    "frameDocumentsNonempty": [
+      true,
+      true,
+      true
+    ],
+    "oneFrameZeroHeight": true
+  },
+  "production": {
+    "version": "0.3.0",
+    "transport": "active",
+    "sourceGuard": "active",
+    "modelUnchanged": true,
+    "tasksEnabled": true,
+    "taskCount": 6,
+    "probeAbsent": true,
+    "startup": true,
+    "helper": true,
+    "allModules": {
+      "sourceGuard": "active",
+      "preload": "disabled",
+      "render": "active",
+      "ui": "native-selected-options-fast-path",
+      "transport": "active",
+      "tokens": "active",
+      "fastPaths": "active",
+      "interactions": true
+    }
+  },
+  "checks": {
+    "testsPassed": 119,
+    "testsSkipped": 0,
+    "syntaxFiles": 39,
+    "independentTestsPassed": 59,
+    "independentTestsSkipped": 1,
+    "protectedDataFilesUnchanged": 194,
+    "littleWhiteBoxOfficialTrackedFiles": 3481
+  },
+  "sourceSha256": {
+    "client/source-guard.js": "a89ed25544e2b11b82035b0b977c9d40f83426d16034ed7aad9d6a5baa0ad83b",
+    "client/render.js": "88c9841dfd240572f533e9ed227baaa6de6fa4daaaf531bece43b4198603be3a",
+    "client/startup.mjs": "aa5877c5a8572af8b7b95132b7482928f267f0fbeb23f7a33a773431dc40e0dd",
+    "client/index.js": "7b4a4a0ed6ea9497c32cde78859d07d63aa794a7bab8cfdb09aa6d4f53312ad6"
+  },
+  "limitations": [
+    "Not a comparison against the old combined optimizer suite.",
+    "No certified whole-site first-load improvement; startupPreload remains off.",
+    "MVU/tag replay max timer gaps did not improve consistently; residual pauses around one second remain.",
+    "No physical phone or energy/memory measurement.",
+    "Card-internal rendering defects and auxiliary-model generation not certified."
+  ],
+  "normalGeneration": {
+    "generation": {
+      "done": true,
+      "ms": 13714,
+      "len": 103,
+      "hasChinese": true,
+      "refusal": false
+    },
+    "requestModel": "gemini-3.8-flash-high",
+    "stream": true,
+    "taskMax": 246,
+    "timerGapMax": 235,
+    "chatCount": 3,
+    "lastMessageLength": 103,
+    "reloadReadback": {
+      "chat": 3,
+      "lastLen": 103,
+      "persistedModel": "gemini-3.8-flash-high",
+      "hasChinese": true
+    }
+  },
+  "generationAttempts": {
+    "normalFinalCandidate": 3,
+    "normalResults": [
+      "refusal",
+      "HTTP502-test-endpoint",
+      "103-Chinese-characters-success"
+    ],
+    "earlierNyMainTask": 1,
+    "blockedAuxiliaryRequestsInNormalTests": 7,
+    "productionTestGenerations": 0
+  }
+}
