@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
+import { createStartupWireSender } from './startup-wire.mjs';
 
 // Authority: SillyTavern 1.19.0, commit 7e8663cd9, src/endpoints/settings.js.
 // Both the source (including its private readers) and the installed handler must
@@ -149,8 +150,8 @@ function nativeRuntimeConfig(getConfigValue, parseBytes) {
 export async function installFreshSettingsRoute({ hostRoot = process.cwd(), enabled = false, settingsRouter, reader } = {}) {
     let active = false;
     let reason = 'disabled';
-    let layer, original, replacement;
-    const status = () => ({ active: active && layer?.handle === replacement, reason: active && layer?.handle !== replacement ? 'ownership_lost' : reason, version: VERIFIED_SETTINGS_VERSION, reader: reader?.stats?.() });
+    let layer, original, replacement, wire;
+    const status = () => ({ active: active && layer?.handle === replacement, reason: active && layer?.handle !== replacement ? 'ownership_lost' : reason, version: VERIFIED_SETTINGS_VERSION, reader: reader?.stats?.(), wire: wire?.stats() });
     const dispose = () => {
         if (active && layer?.handle === replacement) layer.handle = original;
         active = false;
@@ -193,10 +194,17 @@ export async function installFreshSettingsRoute({ hostRoot = process.cwd(), enab
             reader = createFreshSettingsReader({ getRuntimeConfig: () => nativeRuntimeConfig(getConfigValue, bytes.parse) });
         }
         if (typeof reader.read !== 'function') throw new TypeError('Fresh settings reader is required');
+        let Negotiator;
+        try {
+            const hostRequire = createRequire(path.join(root, 'package.json'));
+            Negotiator = createRequire(hostRequire.resolve('compression'))('negotiator');
+        }
+        catch { /* Missing optional negotiation capability retains native sending. */ }
+        wire = createStartupWireSender({ Negotiator });
         replacement = function tavernFlowFreshSettings(request, response, next) {
             // Return the promise for direct tests; Express 4 receives all failures
             // through next(), rather than an unhandled async handler rejection.
-            return reader.read(request).then(value => response.send(value), error => {
+            return reader.read(request).then(value => wire.send(request, response, value)).catch(error => {
                 if (error.message === 'Settings file could not be read') return response.sendStatus(500);
                 return next(error);
             });

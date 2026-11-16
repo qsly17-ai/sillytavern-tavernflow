@@ -1,0 +1,183 @@
+{
+  "version": "0.4.0",
+  "host": "SillyTavern 1.19.0 / 7e8663cd9",
+  "browser": "Chromium headless, viewport 390x844",
+  "generationRequestsBlocked": true,
+  "realModelCalls": 0,
+  "chatFaults": [
+    {
+      "kind": "light",
+      "mode": "headers",
+      "ms": 32574,
+      "calls": 2,
+      "messages": 3,
+      "frames": 0,
+      "messageHashMatches": true,
+      "variableHashMatches": true,
+      "framesReady": true,
+      "waitingAfter": 0,
+      "actualChatWrites": 0,
+      "noopChecks": 1
+    },
+    {
+      "kind": "light",
+      "mode": "body",
+      "ms": 32271,
+      "calls": 2,
+      "messages": 3,
+      "frames": 0,
+      "messageHashMatches": true,
+      "variableHashMatches": true,
+      "framesReady": true,
+      "waitingAfter": 0,
+      "actualChatWrites": 0,
+      "noopChecks": 0
+    },
+    {
+      "kind": "light",
+      "mode": "http",
+      "ms": 2615,
+      "calls": 2,
+      "messages": 3,
+      "frames": 0,
+      "messageHashMatches": true,
+      "variableHashMatches": true,
+      "framesReady": true,
+      "waitingAfter": 0,
+      "actualChatWrites": 0,
+      "noopChecks": 2
+    },
+    {
+      "kind": "light",
+      "mode": "json",
+      "ms": 2530,
+      "calls": 2,
+      "messages": 3,
+      "frames": 0,
+      "messageHashMatches": true,
+      "variableHashMatches": true,
+      "framesReady": true,
+      "waitingAfter": 0,
+      "actualChatWrites": 0,
+      "noopChecks": 1
+    },
+    {
+      "kind": "light",
+      "mode": "manual",
+      "ms": 62446,
+      "calls": 3,
+      "messages": 3,
+      "frames": 0,
+      "messageHashMatches": true,
+      "variableHashMatches": true,
+      "framesReady": true,
+      "waitingAfter": 0,
+      "actualChatWrites": 0,
+      "noopChecks": 1
+    },
+    {
+      "kind": "heavy",
+      "mode": "headers",
+      "ms": 34017,
+      "calls": 2,
+      "messages": 8,
+      "frames": 3,
+      "messageHashMatches": true,
+      "variableHashMatches": true,
+      "framesReady": true,
+      "waitingAfter": 0,
+      "actualChatWrites": 0,
+      "noopChecks": 1
+    },
+    {
+      "kind": "heavy",
+      "mode": "body",
+      "ms": 34068,
+      "calls": 2,
+      "messages": 8,
+      "frames": 3,
+      "messageHashMatches": true,
+      "variableHashMatches": true,
+      "framesReady": true,
+      "waitingAfter": 0,
+      "actualChatWrites": 0,
+      "noopChecks": 1
+    },
+    {
+      "kind": "heavy",
+      "mode": "http",
+      "ms": 4006,
+      "calls": 2,
+      "messages": 8,
+      "frames": 3,
+      "messageHashMatches": true,
+      "variableHashMatches": true,
+      "framesReady": true,
+      "waitingAfter": 0,
+      "actualChatWrites": 0,
+      "noopChecks": 1
+    },
+    {
+      "kind": "heavy",
+      "mode": "json",
+      "ms": 4068,
+      "calls": 2,
+      "messages": 8,
+      "frames": 3,
+      "messageHashMatches": true,
+      "variableHashMatches": true,
+      "framesReady": true,
+      "waitingAfter": 0,
+      "actualChatWrites": 0,
+      "noopChecks": 1
+    },
+    {
+      "kind": "heavy",
+      "mode": "manual",
+      "ms": 81255,
+      "calls": 3,
+      "messages": 8,
+      "frames": 3,
+      "messageHashMatches": true,
+      "variableHashMatches": true,
+      "framesReady": true,
+      "waitingAfter": 0,
+      "actualChatWrites": 0,
+      "noopChecks": 1
+    }
+  ],
+  "worldFreshPage": {
+    "faultCalls": 4,
+    "recovered": 1,
+    "messages": 8,
+    "frames": 3,
+    "framesReady": true
+  },
+  "draftRecovery": {
+    "completeUnicodeDraft": true,
+    "clipboardDeniedFallbackSelected": true,
+    "reloadCancelledDraftPreserved": true
+  },
+  "groupRecovery": {
+    "http503ThenComplete": true,
+    "calls": 2,
+    "messages": 1,
+    "unknownFieldsPreserved": true,
+    "waitingAfter": 0
+  },
+  "pageErrors": [],
+  "verification": {
+    "hostTests": 155,
+    "passed": 155,
+    "failed": 0,
+    "skipped": 0,
+    "syntaxFiles": 66
+  },
+  "limits": [
+    "No physical phone or actual peak-hour network test",
+    "Ordinary third-party chat reads retain native behavior",
+    "Signal-dropping wrappers and third-party asynchronous waits are not guaranteed recoverable",
+    "No client response memory peak measurement"
+  ],
+  "messageHashScope": "All message .mes text in original order; variables hashed separately"
+}

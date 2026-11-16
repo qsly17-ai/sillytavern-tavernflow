@@ -22,6 +22,7 @@ let blockers = [], settings = {}, readyContext;
 let transitions = Promise.resolve();
 let shutdown = Promise.resolve(), lifecycle = 0;
 let legacyWorker = null;
+let priming = Promise.resolve();
 let requiresReload = false;
 const migration = retireLegacyWorker().then(result => { legacyWorker = result; update(); });
 const getContext = () => globalThis.SillyTavern?.getContext?.();
@@ -36,6 +37,7 @@ function reconcileEarly({ initial = false } = {}) {
     const context = getContext();
     const options = { ...defaults, ...context?.extensionSettings?.[ID] };
     const enabled = alive && options.enabled && !earlyBlocked(context);
+    globalThis.__tavernFlowBoot?.setEnabled(enabled);
     if (!enabled || !options.sourceGuard) { early.sourceGuard?.dispose(); delete early.sourceGuard; }
     else if (!early.sourceGuard) early.sourceGuard = installSourceGuard({ getContext,
         getVersions: () => ({ client: CLIENT_VERSION.split(':')[1], helper: getExtensionManifest('third-party/JS-Slash-Runner')?.version }), onStats: update });
@@ -45,10 +47,10 @@ function reconcileEarly({ initial = false } = {}) {
 }
 export function getStatus() {
     requiresReload ||= modules.transport?.status().requiresReload === true;
-    return { version: '0.3.0', enabled: alive && settings.enabled, backend: health, blockers: blockers.slice(),
+    return { version: '0.4.0', enabled: alive && settings.enabled, backend: health, blockers: blockers.slice(),
         modules: Object.fromEntries(Object.entries({ sourceGuard: inactive('disabled'),
             preload: inactive(alive && settings.enabled && settings.startupPreload ? 'next-start' : 'disabled'),
-            ...early, ...modules }).map(([name, module]) => [name, module.status()])),
+            loading: globalThis.__tavernFlowBoot || inactive('bootstrap-not-installed'), ...early, ...modules }).map(([name, module]) => [name, module.status()])),
         requiresReload, legacyWorker, options: { ...settings } };
 }
 function update() { panel?.update(getStatus()); }
@@ -77,16 +79,15 @@ async function startModulesNow(epoch) {
     modules.render = overlap ? inactive('overlapping-optimizer') : installRender({ context, onStats: update });
     modules.ui = installUIOptimizations({ context, options: { disableSpellcheck: settings.disableSpellcheck, quickDrawers: settings.quickDrawers && !overlap }, onStats: update });
     if (!settings.render) { modules.render.dispose(); modules.render = inactive('disabled'); }
-    let nextHealth = null;
-    try {
-        const response = await fetch('/api/plugins/tavern-flow/health', { cache: 'no-store', headers: context.getRequestHeaders() });
-        if (response.ok) nextHealth = await response.json();
-    } catch { /* Rendering still works without the optional server component. */ }
+    await priming;
+    if (!alive || epoch !== generation) return;
+    const nextHealth = health || await readBackendHealth(context);
     if (!alive || epoch !== generation) return;
     health = nextHealth;
     const backend = health?.ok === true;
     if (settings.transport && backend && !overlap) {
-        if (!modules.transport || modules.transport.status().enabled !== true) {
+        const transportState = modules.transport?.status();
+        if (!transportState?.enabled && transportState?.reason !== 'starting') {
             await modules.transport?.dispose();
             modules.transport = installTransport({ context, onStats: update });
         }
@@ -107,6 +108,26 @@ async function startModulesNow(epoch) {
     if (!alive || epoch !== generation) { interactions.dispose(); return; }
     modules.interactions = interactions;
     update();
+}
+async function readBackendHealth(context) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 6000);
+    try {
+        const response = await fetch('/api/plugins/tavern-flow/health', { cache: 'no-store', headers: context.getRequestHeaders(), signal: controller.signal });
+        return response.ok ? await response.json() : null;
+    } catch { return null; }
+    finally { clearTimeout(timer); }
+}
+async function primeTransport(token) {
+    const context = getContext();
+    const options = { ...defaults, ...context?.extensionSettings?.[ID] };
+    if (!options.enabled || !options.transport || earlyBlocked(context)) return;
+    const candidate = await readBackendHealth(context);
+    if (!alive || token !== lifecycle || !candidate?.ok) return;
+    const current = { ...defaults, ...getContext()?.extensionSettings?.[ID] };
+    if (!current.enabled || !current.transport || earlyBlocked(getContext())) return;
+    health = candidate;
+    modules.transport = installTransport({ context, onStats: update });
 }
 function start() {
     if (!alive || panel) return;
@@ -130,7 +151,11 @@ export async function enable() {
     if (!alive || token !== lifecycle) return;
     readyContext = getContext();
     if (!readyContext?.eventSource || !readyContext.eventTypes?.APP_READY) { alive = false; return; }
+    globalThis.addEventListener?.('tavernflow:loading', update);
     reconcileEarly({ initial: true });
+    // Business extensions save settings during startup. Prime the same saving
+    // session here, rather than uploading full snapshots until APP_READY.
+    priming = primeTransport(token).catch(() => {});
     waiting = start;
     // ST 1.19 remembers APP_READY and immediately fires for late subscribers.
     readyContext.eventSource.on(readyContext.eventTypes.APP_READY, waiting);
@@ -138,11 +163,14 @@ export async function enable() {
 export async function disable() {
     if (!alive) return shutdown;
     alive = false; generation++; lifecycle++;
+    globalThis.removeEventListener?.('tavernflow:loading', update);
+    globalThis.__tavernFlowBoot?.setEnabled(false);
     for (const module of Object.values(early)) module.dispose();
     for (const key of Object.keys(early)) delete early[key];
     if (waiting) readyContext?.eventSource?.removeListener(readyContext.eventTypes.APP_READY, waiting);
     waiting = null;
     shutdown = shutdown.then(async () => {
+        await priming;
         await transitions.catch(() => {});
         await stopModules();
         panel?.dispose(); panel = null;

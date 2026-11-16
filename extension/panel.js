@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-const reasons = { active: '运行中', disabled: '已关闭', disposed: '已停止', starting: '准备中',
+const reasons = { 'bootstrap-not-installed': '未安装早期加载恢复', active: '运行中', disabled: '已关闭', disposed: '已停止', starting: '准备中',
     'overlapping-optimizer': '检测到重叠优化，请先停用旧组合并刷新', 'backend-unavailable': '服务端未就绪',
     'worker-capability-unavailable': '浏览器暂不支持后台保存', 'native-input-sizing-preserved': '保留原生输入布局',
     'reload-required': '保存冲突或结果未确认，请刷新后重新读取',
@@ -21,8 +21,9 @@ export function mountPanel({ onChange }) {
       <div class="tf-metrics" aria-live="off"><div><strong data-stat="saved">0 B</strong><span>本页减少上传</span></div><div><strong data-stat="deferred">0</strong><span>轻量绘制楼层</span></div><div><strong data-stat="saves">0</strong><span>后台保存次数</span></div></div>
       <div class="tf-notice" role="status"></div><div class="tf-switches"></div>
       <p class="tf-note">MVU、酒馆助手、提示词模板、小白X与数据库仍负责原有功能。含 iframe 的楼层保持实时。</p>
+      <button type="button" class="tf-load-retry menu_button" hidden>重试网络读取</button>
       <details class="tf-diagnostics"><summary>模块状态</summary><dl></dl></details>
-      <small class="tf-version">0.3.0 · SillyTavern 1.19.0</small></div></details>`;
+      <small class="tf-version">0.4.0 · SillyTavern 1.19.0</small></div></details>`;
     const switches = root.querySelector('.tf-switches');
     const choices = [['enabled', '启用清酌'], ['sourceGuard', '重前端加载减负'], ['startupPreload', '首屏并行预取（试验，下次打开生效）'], ['transport', '后台差量保存'], ['render', '历史文字绘制减负'], ['tokens', '合并并发 Token 计数'], ['fastPaths', '命令与正则快速路径'], ['quickDrawers', '抽屉即时展开'], ['interactions', '预设开关即时响应'], ['lightweightDrag', '轻量拖影（试验）']];
     for (const [key, label] of choices) {
@@ -41,12 +42,17 @@ export function mountPanel({ onChange }) {
         });
     };
     root.addEventListener('change', listener);
+    const retryButton = root.querySelector('.tf-load-retry');
+    const retryRead = () => globalThis.__tavernFlowBoot?.retry();
+    retryButton.addEventListener('click', retryRead);
     let timer, latest;
     const paint = () => {
         timer = null;
         if (!latest) return;
         const { modules = {}, options = {}, blockers = [] } = latest;
         const transport = modules.transport || {};
+        retryButton.hidden = !(modules.loading?.waiting > 0);
+        retryButton.style.display = retryButton.hidden ? 'none' : '';
         const requiresReload = latest.requiresReload || transport.requiresReload;
         root.querySelector('[data-stat="saved"]').textContent = bytes(Math.max(0, (transport.sourceBytes || 0) - (transport.sentBytes || 0)));
         root.querySelector('[data-stat="deferred"]').textContent = String(modules.render?.deferred || 0);
@@ -58,12 +64,12 @@ export function mountPanel({ onChange }) {
         notice.hidden = !notice.textContent;
         for (const input of root.querySelectorAll('[data-option]')) input.checked = !!options[input.dataset.option];
         const dl = root.querySelector('dl'); dl.replaceChildren();
-        for (const [key, label] of [['sourceGuard', '重前端'], ['preload', '首屏预取'], ['transport', '后台保存'], ['render', '长聊天'], ['tokens', 'Token计数'], ['fastPaths', '快速路径'], ['interactions', '预设与拖动'], ['ui', '输入布局']]) {
+        for (const [key, label] of [['loading', '网络加载'], ['sourceGuard', '重前端'], ['preload', '首屏预取'], ['transport', '后台保存'], ['render', '长聊天'], ['tokens', 'Token计数'], ['fastPaths', '快速路径'], ['interactions', '预设与拖动'], ['ui', '输入布局']]) {
             const status = modules[key] || {}, dt = document.createElement('dt'), dd = document.createElement('dd');
-            dt.textContent = label; dd.textContent = key === 'ui' && status.selectedOptionsFastPath ? `选项查询快路 · 命中 ${status.selectedOptionHits || 0} 次` : reasons[status.reason] || status.reason || '准备中'; dl.append(dt, dd);
+            dt.textContent = label; dd.textContent = key === 'loading' && status.enabled ? `运行中 · 恢复 ${status.recovered || 0} 次 · 等待 ${status.waiting || 0} 项` : key === 'ui' && status.selectedOptionsFastPath ? `选项查询快路 · 命中 ${status.selectedOptionHits || 0} 次` : reasons[status.reason] || status.reason || '准备中'; dl.append(dt, dd);
         }
         if (latest.backend?.startup) { const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = '启动读取'; dd.textContent = latest.backend.startup.active ? '全新鲜异步读取' : '原生路径'; dl.append(dt, dd); }
     };
     return { update(state) { latest = state; if (!timer) timer = setTimeout(paint, 150); },
-        dispose() { clearTimeout(timer); root.removeEventListener('change', listener); root.remove(); } };
+        dispose() { clearTimeout(timer); root.removeEventListener('change', listener); retryButton.removeEventListener('click', retryRead); root.remove(); } };
 }
