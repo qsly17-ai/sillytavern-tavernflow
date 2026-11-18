@@ -14,12 +14,12 @@ function fixture(fetch) {
             showModal() { this.open = true; }, close() { this.open = false; } };
     } };
     const host = { fetch, document, location: { href: 'https://example.test/', origin: 'https://example.test' },
-        Headers, URL, Blob, Response, AbortController, ReadableStream,
+        Headers, URL, Blob, Response, AbortController, ReadableStream, structuredClone,
         setTimeout(fn, delay) { return setTimeout(fn, delay === 30000 || delay === 60000 ? 40 : delay === 750 ? 0 : delay); }, clearTimeout };
     host.top = host; vm.runInNewContext(source, host);
     const call = (path = '/api/chats/get', overrides = {}) => {
         const init = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"file_name":"same-chat"}', ...overrides };
-        return path.startsWith('/api/chats/') ? host.__tavernFlowBoot.nativeRead(path, init) : host.fetch(path, init);
+        return path === '/api/settings/get' || path.startsWith('/api/chats/') ? host.__tavernFlowBoot.nativeRead(path, init) : host.fetch(path, init);
     };
     return { host, call, nodes };
 }
@@ -106,9 +106,41 @@ test('valid JSON with invalid settings schema is retried before returning to nat
     let calls = 0; const { call } = fixture(async () => new Response(++calls === 1 ? '{"settings":"null"}' : '{"settings":"{}"}'));
     assert.equal((await (await call('/api/settings/get')).json()).settings, '{}'); assert.equal(calls, 2);
 });
+test('a background settings read cannot change whether this page uses recovery', async () => {
+    const body = { settings: JSON.stringify({ extension_settings: { 'tavern-flow': { enabled: false } } }) };
+    const response = Response.json(body);
+    const { host } = fixture(async () => response);
+    assert.equal(await host.fetch('/api/settings/get', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }), response);
+    assert.equal(host.__tavernFlowBoot.status().enabled, true);
+    assert.equal(host.__tavernFlowBoot.status().reads, 0);
+});
 test('the native first-use empty directory object is valid and causes no retries', async () => {
     const { call, host } = fixture(async () => new Response('{}'));
     assert.deepEqual(await (await call()).json(), {}); assert.equal(host.__tavernFlowBoot.status().retries, 0);
+});
+test('the native missing-character response completes without a recovery dialog', { timeout: 1000 }, async () => {
+    const missing = new Response('Not Found', { status: 404 });
+    const { call, host, nodes } = fixture(async () => missing);
+    assert.equal(await call('/api/characters/get'), missing);
+    assert.equal(host.__tavernFlowBoot.status().waiting, 0);
+    assert.deepEqual(nodes, []);
+});
+test('Quick Reply reads only its small payload and keeps the native settings fallback', async () => {
+    for (const usable of [true, false]) {
+        const sent = [];
+        const body = { quickReplyPresets: [{ name: 'example' }] };
+        const { host } = fixture(async (url, init) => {
+            sent.push(url);
+            assert.equal(new Headers(init.headers).get('x-csrf-token'), 'test');
+            if (url === '/api/settings/get') return Response.json({ settings: '{}', ...body });
+            return usable ? Response.json(body) : new Response('<html>proxy fallback</html>');
+        });
+        const response = await host.__tavernFlowBoot.quickReplyRead('/api/settings/get', {
+            method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': 'test' }, body: '{}',
+        });
+        assert.deepEqual((await response.json()).quickReplyPresets, body.quickReplyPresets);
+        assert.deepEqual(sent, ['/api/plugins/tavern-flow/quick-reply-presets', ...(usable ? [] : ['/api/settings/get'])]);
+    }
 });
 test('a late response cannot be delivered into a different selected chat', async () => {
     let release; const { call, host, nodes } = fixture(() => new Promise(resolve => { release = resolve; }));

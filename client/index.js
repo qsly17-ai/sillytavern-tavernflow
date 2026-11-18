@@ -47,7 +47,7 @@ function reconcileEarly({ initial = false } = {}) {
 }
 export function getStatus() {
     requiresReload ||= modules.transport?.status().requiresReload === true;
-    return { version: '0.4.0', enabled: alive && settings.enabled, backend: health, blockers: blockers.slice(),
+    return { version: '0.4.1', enabled: alive && settings.enabled, backend: health, blockers: blockers.slice(),
         modules: Object.fromEntries(Object.entries({ sourceGuard: inactive('disabled'),
             preload: inactive(alive && settings.enabled && settings.startupPreload ? 'next-start' : 'disabled'),
             loading: globalThis.__tavernFlowBoot || inactive('bootstrap-not-installed'), ...early, ...modules }).map(([name, module]) => [name, module.status()])),

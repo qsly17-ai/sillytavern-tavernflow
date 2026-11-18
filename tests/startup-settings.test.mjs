@@ -79,8 +79,12 @@ async function checkNative() {
     const installed = await installFreshSettingsRoute({ hostRoot: host, enabled: true, settingsRouter: native.router });
     assert.equal(installed.status().active, true, JSON.stringify(installed.status()));
     assert.deepEqual((await callNative(layer.handle, request)).body, (await callNative(original, request)).body);
+    const nativeQuickReplies = (await callNative(original, request)).body.quickReplyPresets;
     await fs.rm(path.join(request.user.directories.root, 'settings.json'));
     assert.equal((await callNative(layer.handle, request)).code, 500);
+    assert.deepEqual(await installed.readQuickReplyPresets(request), nativeQuickReplies);
+    await fs.writeFile(path.join(request.user.directories.quickreplies, 'A.json'), '17');
+    assert.ok((await installed.readQuickReplyPresets(request)).includes(17));
     await fs.writeFile(path.join(request.user.directories.root, 'settings.json'), '{}');
     await fs.rm(request.user.directories.themes, { recursive: true });
     let errorFromNext;
@@ -91,6 +95,7 @@ async function checkNative() {
     installed.dispose();
     assert.equal(layer.handle, original);
     assert.equal(installed.status().active, false);
+    assert.equal(await installed.readQuickReplyPresets(request), undefined);
 
     const second = await installFreshSettingsRoute({ hostRoot: host, enabled: true, settingsRouter: native.router });
     const thirdParty = () => {};

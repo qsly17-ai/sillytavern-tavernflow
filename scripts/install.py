@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Install own files and one hash-checked early loader block. Preview by default."""
-import argparse, hashlib, json, os, pathlib, shutil, sys, tempfile
+import argparse, hashlib, json, os, pathlib, shutil, stat, sys, tempfile
 
 BEGIN=b'\n<!-- TAVERNFLOW BOOT BEGIN -->\n'
 END=b'<!-- TAVERNFLOW BOOT END -->\n'
 MARKER='.tavern-flow-install.json'
 BOOT_RECEIPT='.tavern-flow-boot.json'
-HOOKS={
+LEGACY_READ_HOOKS={
  'public/script.js':[(b"const response = await fetch('/api/chats/get', {", b"const response = await (globalThis.__tavernFlowBoot?.nativeRead || fetch)('/api/chats/get', { /* TAVERNFLOW NATIVE READ */")],
  'public/scripts/group-chats.js':[
   (b'async function loadGroupChat(chatId) {',b'async function loadGroupChat(chatId, nativeNavigation = false) { /* TAVERNFLOW NATIVE READ */'),
@@ -14,21 +14,52 @@ HOOKS={
   (b'const data = await loadGroupChat(chat_id);',b'const data = await loadGroupChat(chat_id, true); /* TAVERNFLOW NATIVE READ */'),
  ],
 }
+HOOKS={
+ 'public/script.js':[
+  *LEGACY_READ_HOOKS['public/script.js'],
+  (b'const data = await response.json();\n        if (Array.isArray(data) && data.length > 0) {',
+   b'const data = await response.json();\n        globalThis.__tavernFlowBoot?.adoptRead?.(response, data); /* TAVERNFLOW NATIVE READ */\n        if (Array.isArray(data) && data.length > 0) {'),
+  (b"export async function getSettings(initLoaderHandle = null) {\n    const response = await fetch('/api/settings/get', {",
+   b"export async function getSettings(initLoaderHandle = null) {\n    const response = await (globalThis.__tavernFlowBoot?.nativeRead || fetch)('/api/settings/get', { /* TAVERNFLOW NATIVE READ */"),
+  (b'settings = JSON.parse(data.settings);',
+   b'settings = JSON.parse(data.settings);\n        globalThis.__tavernFlowBoot?.adoptRead?.(response, data.settings); /* TAVERNFLOW NATIVE READ */'),
+ ],
+ 'public/scripts/group-chats.js':[
+  *LEGACY_READ_HOOKS['public/scripts/group-chats.js'],
+  (b'if (!Array.isArray(data)) {\n            return [];\n        }\n        return data;',
+   b'if (!Array.isArray(data)) {\n            return [];\n        }\n        if (nativeNavigation) globalThis.__tavernFlowBoot?.adoptRead?.(response, data); /* TAVERNFLOW NATIVE READ */\n        return data;'),
+ ],
+ 'public/scripts/extensions/quick-reply/index.js':[
+  (b"const response = await fetch('/api/settings/get', {",
+   b"const response = await (globalThis.__tavernFlowBoot?.quickReplyRead || fetch)('/api/settings/get', { /* TAVERNFLOW NATIVE READ */"),
+ ],
+}
 VERIFIED={
  'public/script.js':'955c603d0bad84bac5a716f0818d85c2543e44d4c43878e0d63ef1e55ca91855',
  'public/scripts/events.js':'2aa1c20f140fab8967e6f850bd6e253bd0aa6e7c6a2e0540778cb11dd0f3a6ea',
  'public/scripts/group-chats.js':'862eb24dfe1f596a2bd6d039a69397667829e0fc34471d22d2028d7781a5c73c',
+ 'public/scripts/extensions/quick-reply/index.js':'d486692119260c299545f8b1a0390dedc003888c5508e2b4b59abb131c0b4911',
  'src/endpoints/settings.js':'bbc3d36ad758b1fc567f63f1e24eada063172791005c5b3baadc195b78726955',
+ 'src/endpoints/chats.js':'40012ebc71a75357e62f7532e5b20def0d8b6c132bb6ab48f662993cc97b9063',
 }
 def sha(data): return hashlib.sha256(data).hexdigest()
 def inventory(dest):
  return {str(f.relative_to(dest)):sha(f.read_bytes()) for f in dest.rglob('*') if f.is_file() and f.name!=MARKER}
+def hook_receipt(hooks):
+ return {relative:[sha(new) for _,new in pairs] for relative,pairs in hooks.items()}
 def atomic_write(file,data):
- mode=file.stat().st_mode & 0o777
+ original=file.lstat()
+ if not stat.S_ISREG(original.st_mode):raise OSError('不是普通文件：'+str(file))
  fd,name=tempfile.mkstemp(prefix='.tavern-flow-',dir=file.parent)
  try:
-  with os.fdopen(fd,'wb') as stream: stream.write(data);stream.flush();os.fsync(stream.fileno())
-  os.chmod(name,mode);os.replace(name,file)
+  with os.fdopen(fd,'wb') as stream:
+   stream.write(data);stream.flush()
+   current=os.fstat(stream.fileno())
+   if (current.st_uid,current.st_gid)!=(original.st_uid,original.st_gid):
+    os.fchown(stream.fileno(),original.st_uid,original.st_gid)
+   os.fchmod(stream.fileno(),stat.S_IMODE(original.st_mode))
+   os.fsync(stream.fileno())
+  os.replace(name,file)
  finally:
   if os.path.exists(name):os.unlink(name)
 def remove_boot(index,receipt):
@@ -41,8 +72,10 @@ def recovery_snapshot(staging,changes):
  records=[]
  for i,(file,data,_) in enumerate(changes):
   backup=pathlib.Path(staging)/('host-before-'+str(i))
-  backup.write_bytes(data);os.chmod(backup,file.stat().st_mode & 0o777)
-  records.append({'target':str(file),'backup':str(backup),'sha256':sha(data)})
+  original=file.lstat()
+  backup.write_bytes(data)
+  records.append({'target':str(file),'backup':str(backup),'sha256':sha(data),
+                  'uid':original.st_uid,'gid':original.st_gid,'mode':stat.S_IMODE(original.st_mode)})
  (pathlib.Path(staging)/'recovery.json').write_text(json.dumps(records,indent=2))
 def restore_written(written):
  failures=[]
@@ -73,10 +106,11 @@ def main():
   boot=targets[0]/BOOT_RECEIPT
   if boot.exists():
    boot_data=json.loads(boot.read_text());after=remove_boot(before,boot_data)
-   for relative,record in boot_data.get('nativeHooks',{}).items():
-    if relative not in HOOKS or record!=[sha(new) for _,new in HOOKS[relative]]:raise SystemExit('原生读取标记回执不匹配')
+   hooks=LEGACY_READ_HOOKS if boot_data.get('version')=='0.4.0' else HOOKS
+   if boot_data.get('nativeHooks')!=hook_receipt(hooks):raise SystemExit('原生读取标记回执不匹配')
+   for relative,pairs in hooks.items():
     file=host/relative;data=file.read_bytes();result=data
-    for old,new in HOOKS[relative]:
+    for old,new in reversed(pairs):
      if result.count(new)!=1:raise SystemExit('原生读取标记缺失或已有变化，拒绝回滚：'+relative)
      result=result.replace(new,old,1)
     changes.append((file,data,result))
@@ -118,7 +152,7 @@ def main():
  block=BEGIN+b'<script id="tavern-flow-boot">\n'+code+b'\n</script>\n'+END
  after=before.replace(b'</head>',block+b'</head>',1)
  changes.append((index_file,before,after))
- print(json.dumps({'install':[str(x) for x in targets],'changesOtherPlugins':False,'changesIndex':True,'nativeReadHooks':2,'apply':a.apply}))
+ print(json.dumps({'install':[str(x) for x in targets],'changesIndex':True,'nativeReadHooks':list(HOOKS),'apply':a.apply}))
  if not a.apply:return
  staging=tempfile.mkdtemp(prefix='.tavern-flow-install-',dir=host)
  stage=[pathlib.Path(staging)/'front',pathlib.Path(staging)/'back'];installed=[];written=[]
@@ -129,7 +163,7 @@ def main():
    for d in ['server','shared']:shutil.copytree(back/d,stage[1]/d)
    version=json.loads((front/'manifest.json').read_text())['version']
    (stage[1]/'package.json').write_text(json.dumps({'name':'tavern-flow','version':version,'type':'module','main':'server/index.mjs','license':'AGPL-3.0-only'}))
-   (stage[0]/BOOT_RECEIPT).write_text(json.dumps({'blockSha256':sha(block),'beforeSha256':sha(before),'version':version,'nativeHooks':{relative:[sha(new) for _,new in pairs] for relative,pairs in HOOKS.items()}}))
+   (stage[0]/BOOT_RECEIPT).write_text(json.dumps({'blockSha256':sha(block),'beforeSha256':sha(before),'version':version,'nativeHooks':hook_receipt(HOOKS)}))
    for dest in stage:
     for notice in ['LICENSE','NOTICE.md']:shutil.copy2(base/notice,dest/notice)
     (dest/MARKER).write_text(json.dumps(inventory(dest),indent=2))
@@ -145,5 +179,5 @@ def main():
    finish_failed_recovery(staging,failures)
    raise
  shutil.rmtree(staging)
- print('清酌文件、早期加载块及两处原生读取标记已安装；需重启酒馆、关闭旧页后重开。未修改其他插件或设置。')
+ print('清酌文件、早期加载块及原生读取入口已安装；需重启酒馆、关闭旧页后重开。未修改用户设置。')
 if __name__=='__main__':main()

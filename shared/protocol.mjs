@@ -2,6 +2,23 @@
 const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 
+/** The verified host sanitizes the complete basename, including ".jsonl". */
+export function chatFileName(name) {
+    if (typeof name !== 'string' || !name || name.includes('\0') ||
+        /^[\\/]/.test(name) || name.split(/[\\/]/).some(part => part === '.' || part === '..')) return;
+    const file = `${name}.jsonl`.replace(/[/?<>\\:*|"]/g, '').replace(/[\x00-\x1f\x80-\x9f]/g, '');
+    if (/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i.test(file)) return;
+    if (file.length < 64) return file;
+    let bytes = 0, length = 0;
+    for (const char of file) {
+        const point = char.codePointAt(0);
+        bytes += point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+        if (bytes > 255) break;
+        length += char.length;
+    }
+    return file.slice(0, length);
+}
+
 /** Stable JSON, including integer-like keys, independent of object insertion order. */
 export function canonical(value) {
     const active = new Set();

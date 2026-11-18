@@ -16,7 +16,7 @@ await fs.writeFile(`${stage}/server-plugin/package.json`, JSON.stringify({ name:
 for (const name of ['README.md','USAGE.zh-CN.txt','LICENSE','NOTICE.md','CHANGELOG.md']) await fs.copyFile(`${root}${name}`, `${stage}/${name}`);
 for (const dir of ['extension','server-plugin']) for (const name of ['LICENSE','NOTICE.md']) await fs.copyFile(`${root}${name}`, `${stage}/${dir}/${name}`);
 await fs.mkdir(`${stage}/reports`);
-for (const name of ['acceptance-0.4.md','runtime-0.4.json','review-0.4.md','upstream-0.4.md','source-sha256-0.4.json']) {
+for (const name of ['acceptance-0.4.1.md','source-sha256-0.4.1.json','acceptance-0.4.md','runtime-0.4.json','review-0.4.md','upstream-0.4.md','source-sha256-0.4.json']) {
   await fs.copyFile(`${root}reports/${name}`, `${stage}/reports/${name}`);
 }
 await fs.mkdir(`${stage}/scripts`);

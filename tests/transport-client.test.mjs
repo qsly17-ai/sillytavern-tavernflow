@@ -1,9 +1,10 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, copyFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, copyFile, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import vm from 'node:vm';
 import { installTransport } from '../client/transport.js';
 import { hashValue, applyOps } from '../shared/protocol.mjs';
 
@@ -12,13 +13,14 @@ await mkdir(path.join(fixture, 'lib'));
 await copyFile(new URL('../client/worker.js', import.meta.url), path.join(fixture, 'worker.mjs'));
 await copyFile(new URL('../shared/protocol.mjs', import.meta.url), path.join(fixture, 'lib/protocol.mjs'));
 const { createTransportRuntime } = await import(pathToFileURL(path.join(fixture, 'worker.mjs')));
+const bootSource = await readFile(new URL('../client/boot.js', import.meta.url), 'utf8');
 after(() => rm(fixture, { recursive: true, force: true }));
 const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 const waitFor = async (condition) => {
     for (let n = 0; n < 500; n++) { if (condition()) return; await new Promise((resolve) => setTimeout(resolve, 2)); }
     assert.fail('condition timed out');
 };
-function setup({ gate, unhealthy = false, onSave } = {}) {
+function setup({ gate, unhealthy = false, onSave, bootstrap = false, backgroundChat } = {}) {
     let value = { username: '天子大人', data: 'x'.repeat(10000) };
     const calls = [];
     const workers = [];
@@ -26,6 +28,7 @@ function setup({ gate, unhealthy = false, onSave } = {}) {
         calls.push({ native: true, input, init, receiver: this });
         const url = new URL(input instanceof Request ? input.url : input, 'https://st.test/');
         if (url.pathname === '/api/settings/get') return Promise.resolve(json({ settings: JSON.stringify(value) }));
+        if (url.pathname === '/api/chats/get' && backgroundChat) return Promise.resolve(backgroundChat);
         return Promise.resolve(json({ native: true }));
     };
     async function workerFetch(url, init = {}) {
@@ -61,6 +64,10 @@ function setup({ gate, unhealthy = false, onSave } = {}) {
         terminate() { this.terminated = true; }
     }
     const host = { location: { href: 'https://st.test/', origin: 'https://st.test' }, fetch: native, Worker: FakeWorker, crypto: globalThis.crypto, DecompressionStream: globalThis.DecompressionStream };
+    if (bootstrap) {
+        Object.assign(host, { top: host, AbortController, ReadableStream, Headers, URL, Blob, Response, setTimeout, clearTimeout, structuredClone });
+        vm.runInNewContext(bootSource, host);
+    }
     return { host, calls, workers, native, getValue: () => value, setValue: (next) => { value = next; } };
 }
 async function withHost(h, operation) {
@@ -70,6 +77,14 @@ async function withHost(h, operation) {
 }
 const headers = { 'content-type': 'application/json', 'x-csrf-token': 'test' };
 const save = (value, extra = {}) => ({ method: 'POST', headers, body: JSON.stringify(value), ...extra });
+async function adoptSettings(host) {
+    const boot = host.__tavernFlowBoot;
+    const response = await boot.nativeRead('/api/settings/get', save({}));
+    const { settings } = await response.json();
+    const pageSettings = JSON.parse(settings);
+    boot.adoptRead(response, settings);
+    return pageSettings;
+}
 
 test('client accepts Request/init and native gzip without consuming the original Request', async () => {
     const h = setup();
@@ -93,17 +108,34 @@ test('client accepts Request/init and native gzip without consuming the original
     });
 });
 
-test('native loads seed worker before immediate following saves, no state round trip', async () => {
-    const h = setup();
+test('adopted native settings seed the Worker before an immediate save, without a state round trip', async () => {
+    const h = setup({ bootstrap: true });
     await withHost(h, async () => {
         const controller = installTransport({ getHeaders: () => headers });
         await waitFor(() => controller.status().enabled);
-        const loaded = await (await h.host.fetch('/api/settings/get', save({}))).json();
-        const next = JSON.parse(loaded.settings); next.username = '苏苏子';
+        const next = await adoptSettings(h.host); next.username = '苏苏子';
         assert.equal((await h.host.fetch('/api/settings/save', save(next))).status, 200);
         assert.equal(h.calls.filter((call) => call.route === 'state').length, 0);
         assert.equal(h.calls.filter((call) => call.route === 'save').length, 1);
         controller.dispose();
+    });
+});
+
+test('an unread background chat body cannot delay an unrelated settings save', { timeout: 2000 }, async () => {
+    let stream;
+    const backgroundChat = new Response(new ReadableStream({ start(controller) { stream = controller; } }));
+    const h = setup({ bootstrap: true, backgroundChat });
+    await withHost(h, async () => {
+        const controller = installTransport({ getHeaders: () => headers });
+        try {
+            await waitFor(() => controller.status().enabled);
+            const next = await adoptSettings(h.host); next.username = 'saved while response is open';
+            const response = await h.host.fetch('/api/chats/get', save({ avatar_url: 'test.png', file_name: 'archive' }));
+            assert.equal(response, backgroundChat);
+            assert.equal((await h.host.fetch('/api/settings/save', save(next))).status, 200);
+            assert.deepEqual(h.getValue(), next);
+            assert.equal(response.bodyUsed, false);
+        } finally { stream.close(); await controller.dispose(); }
     });
 });
 
@@ -273,7 +305,7 @@ test('plain-string fast path preserves abort and native passthrough arguments', 
         await assert.rejects(h.host.fetch('/api/settings/save', save({ n: 1 }, { signal: aborted.signal })), { name: 'AbortError' });
         assert.equal(h.workers[0].messages.some((entry) => entry.type === 'save'), false);
         const input = '/api/chats/group/save';
-        const init = save({ id: 'group', chat: [], force: true });
+        const init = save({ id: 'group', chat: [], futureOption: true });
         const response = await h.host.fetch(input, init);
         assert.equal(response.status, 200);
         assert.equal(h.calls.length, 1);
@@ -297,15 +329,17 @@ test('plain-string fast path matches fetch UTF-8 replacement for unpaired surrog
     });
 });
 
-test('real hash conflict survives dispose and reinstall, so an old snapshot never rebases or falls back to native', async () => {
-    const h = setup();
+test('settings adopted before the Worker starts survive background reads and conflict across reinstall', async () => {
+    const h = setup({ bootstrap: true });
     await withHost(h, async () => {
+        const old = await adoptSettings(h.host);
         const controller = installTransport({ getHeaders: () => headers });
         await waitFor(() => controller.status().enabled);
-        const old = JSON.parse((await (await h.host.fetch('/api/settings/get', save({}))).json()).settings);
         const remote = { ...old, username: '另一个页面的新版本' };
         h.setValue(remote);
+        assert.deepEqual(JSON.parse((await (await h.host.fetch('/api/settings/get', save({}))).json()).settings), remote);
         assert.equal((await h.host.fetch('/api/settings/save', save({ ...old, username: '旧页面修改' }))).status, 409);
+        assert.equal(h.calls.some(call => call.route === 'state'), false);
         await controller.dispose();
         // Even a later wrapper restoration/capability failure cannot erase the sentinel.
         h.host.fetch = h.native;
@@ -427,12 +461,12 @@ test('a normal reinstall without remote changes saves from a hash-only baseline 
     });
 });
 
-test('observed native load hashes also survive a worker reinstall before the first save', async () => {
-    const h = setup();
+test('adopted hashes survive a Worker reinstall before the first save', async () => {
+    const h = setup({ bootstrap: true });
     await withHost(h, async () => {
         const controller = installTransport({ getHeaders: () => headers });
         await waitFor(() => controller.status().enabled);
-        const old = JSON.parse((await (await h.host.fetch('/api/settings/get', save({}))).json()).settings);
+        const old = await adoptSettings(h.host);
         await waitFor(() => h.workers[0].events.some((event) => event.type === 'baseline'));
         // Wait until the emitted metadata has actually reached the main thread.
         await new Promise((resolve) => setImmediate(resolve));

@@ -19,6 +19,7 @@ test('verified 1.19 native settings/chat/group persistence, integrity, backup an
         import assert from 'node:assert/strict';
         import fs from 'node:fs/promises';
         import path from 'node:path';
+        import { createRequire } from 'node:module';
         import { pathToFileURL } from 'node:url';
         const host = process.env.TAVERNFLOW_HOST_ROOT;
         const root = process.env.TAVERNFLOW_NATIVE_TEST_ROOT;
@@ -27,7 +28,11 @@ test('verified 1.19 native settings/chat/group persistence, integrity, backup an
         const util = await import(pathToFileURL(path.join(host, 'src/util.js')));
         util.setConfigFilePath(path.join(root, 'config.yaml'));
         const { loadNativePersistence, createHandlers } = await import(pathToFileURL(process.env.TAVERNFLOW_SERVER_MODULE));
-        const { hashValue } = await import(pathToFileURL(process.env.TAVERNFLOW_PROTOCOL_MODULE));
+        const { hashValue, chatFileName } = await import(pathToFileURL(process.env.TAVERNFLOW_PROTOCOL_MODULE));
+        const sanitize = createRequire(path.join(host, 'package.json'))('sanitize-filename');
+        for (const name of ['侦探: 林', '档案/二?', '开场. ', 'COM1', '你'.repeat(100), 'a'.repeat(254) + '😀', '😀'.repeat(70)]) {
+            assert.equal(chatFileName(name) || '', sanitize(name + '.jsonl'));
+        }
         const native = await loadNativePersistence(host);
         const users = await import(pathToFileURL(path.join(host, 'src/users.js')));
         const user = { profile: { handle: 'flow-test' }, directories: users.getUserDirectories('flow-test') };
@@ -38,8 +43,8 @@ test('verified 1.19 native settings/chat/group persistence, integrity, backup an
             await handlers[method]({ user, body }, response);
             return response;
         };
-        const chat = { kind: 'chat', identity: { avatar_url: 'test.png', file_name: 'native-test' } };
-        const group = { kind: 'group', identity: { id: 'group-native-test' } };
+        const chat = { kind: 'chat', identity: { avatar_url: 'test.png', file_name: '侦探: 林' } };
+        const group = { kind: 'group', identity: { id: 'group-native:test' } };
         const original = [{ chat_metadata: { integrity: 'known', extra: { hp: 3 } } }, { mes: 'abc', swipes: ['abc', 'def'] }];
         for (const resource of [chat, group]) {
             const result = await call('save', { ...resource, mode: 'full', baseHash: await hashValue([]), nextHash: await hashValue(original), value: original });
@@ -47,8 +52,14 @@ test('verified 1.19 native settings/chat/group persistence, integrity, backup an
             assert.deepEqual((await call('state', resource)).body.value, original);
             const corrupt = structuredClone(original); corrupt[0].chat_metadata.integrity = 'stale';
             const conflict = await call('save', { ...resource, mode: 'full', baseHash: await hashValue(original), nextHash: await hashValue(corrupt), value: corrupt });
-            assert.equal(conflict.code, 409); assert.equal(conflict.body.error, 'integrity');
+            assert.equal(conflict.code, 400); assert.equal(conflict.body.error, 'integrity');
+            const overwrite = { ...resource, mode: 'full', baseHash: await hashValue(original), nextHash: await hashValue(corrupt), value: corrupt, force: true };
+            assert.equal((await call('save', overwrite)).code, 200);
+            assert.deepEqual((await call('state', resource)).body.value, corrupt);
+            const staleForce = await call('save', overwrite);
+            assert.equal(staleForce.code, 409); assert.equal(staleForce.body.error, 'conflict');
         }
+        assert.deepEqual((await call('state', { ...chat, identity: { ...chat.identity, file_name: '侦探 林' } })).body.value[1], original[1]);
         const settings = { extension_settings: { mvu: { custom: true } }, custom: 'preserve' };
         const settingsSave = await call('save', { kind: 'settings', identity: {}, mode: 'full', baseHash: await hashValue({}), nextHash: await hashValue(settings), value: settings });
         assert.equal(settingsSave.code, 200);
@@ -56,7 +67,7 @@ test('verified 1.19 native settings/chat/group persistence, integrity, backup an
         const backups = await fs.readdir(user.directories.backups);
         assert(backups.some(name => name.startsWith('settings_flow-test_')));
         assert(backups.some(name => name.startsWith('chat_test_')));
-        assert(backups.some(name => name.startsWith('chat_group_native_test_')));
+        assert(backups.some(name => name.startsWith('chat_group_nativetest_')));
         const request = { model: 'gpt-4o', messages: [{ role: 'user', content: '中文与 Emoji 😀' }] };
         const tokenBatch = await call('tokens', { requests: [request, request] });
         assert.equal(tokenBatch.code, 200);

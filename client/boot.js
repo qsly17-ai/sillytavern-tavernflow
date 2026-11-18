@@ -11,8 +11,12 @@
         ['/api/chats/get', '聊天'], ['/api/chats/group/get', '群聊'], ['/api/worldinfo/get', '世界书'],
         ['/api/backgrounds/all', '背景列表'], ['/api/backgrounds/folders', '背景文件夹'],
     ]);
-    const stats = { version: '0.4.0', reads: 0, recovered: 0, retries: 0, waiting: 0, active: 0 };
+    const stats = { version: '0.4.1', reads: 0, recovered: 0, retries: 0, waiting: 0, active: 0 };
     const waiting = new Set();
+    const nativeResponses = new WeakMap();
+    const chatBodies = new WeakMap();
+    const adoptions = new Map();
+    let adoptionId = 0, sendAdoption;
     let enabled = true, dialog, label, button, draftArea, copyDraft;
     // This is an inactivity limit: a large response making progress may take any
     // total time. Test clocks may replace timers, never product URL parameters.
@@ -125,6 +129,8 @@
             const response = await fetcher.call(receiver, input, { ...init, signal: controller.signal });
             touch();
             if (!response.ok) {
+                // The character endpoint uses 404 to mean the card was deleted.
+                if (pathname === '/api/characters/get' && response.status === 404) return response;
                 void response.body?.cancel().catch(() => {});
                 const error = new Error('http'); error.status = response.status; throw error;
             }
@@ -160,6 +166,7 @@
                 return result;
             }
             metadata(complete);
+            if (pathname.startsWith('/api/chats/')) chatBodies.set(complete, blob);
             return complete;
         } finally {
             clearTimeout(timer);
@@ -203,22 +210,71 @@
     }
     function wrapped(input, init) {
         const path = enabled ? qualify(input, init) : undefined;
-        // Native navigation has an explicit verified hook. Helper/database chat
-        // reads retain their own response, cancellation and selection contract.
-        if (path?.startsWith('/api/chats/')) return original.apply(this, arguments);
+        // Native settings and chat navigation have verified hooks. Other
+        // callers of the same URLs keep their own response and recovery.
+        if (path === '/api/settings/get' || path?.startsWith('/api/chats/')) return original.apply(this, arguments);
         return path ? read(this, input, { ...init, headers: new Headers(init.headers) }, path) : original.apply(this, arguments);
     }
     host.fetch = wrapped;
     host.__tavernFlowBoot = Object.freeze({
         status: () => ({ ...stats, enabled, reason: enabled ? 'active' : 'disabled' }),
         retry,
-        nativeRead(input, init) {
-            const path = enabled ? qualify(input, init) : undefined;
+        async nativeRead(input, init) {
+            const path = qualify(input, init);
+            const identity = path ? JSON.parse(init.body || '{}') : undefined;
             // Call the current complete fetch chain, so business wrappers remain
             // in place. Its signal makes the ordinary boot wrapper pass through.
-            return path?.startsWith('/api/chats/')
-                ? read(host, input, { ...init, headers: new Headers(init.headers) }, path, host.fetch)
-                : host.fetch(input, init);
+            const response = enabled && (path === '/api/settings/get' || path?.startsWith('/api/chats/'))
+                ? await read(host, input, { ...init, headers: new Headers(init.headers) }, path, host.fetch)
+                : await host.fetch(input, init);
+            if (path && response.ok) nativeResponses.set(response, { path, identity });
+            return response;
+        },
+        adoptRead(response, value) {
+            const resource = nativeResponses.get(response);
+            if (!resource) return;
+            nativeResponses.delete(response);
+            // Settings are already an immutable string. Normally chat reads
+            // can reuse the completed Blob, without cloning a mutable history.
+            let snapshot;
+            try { snapshot = resource.path === '/api/settings/get' ? value : chatBodies.get(response) ?? structuredClone(value); }
+            catch { /* Missing snapshots fail closed in the saving Worker. */ }
+            chatBodies.delete(response);
+            const adoptionKey = JSON.stringify([resource.path, resource.identity]);
+            const message = { type: 'seed', ...resource, snapshot, adoptionKey, adoptionId: ++adoptionId };
+            adoptions.delete(adoptionKey);
+            adoptions.set(adoptionKey, message);
+            // Before a Worker is available (including while disabled), retain
+            // the settings and the last six chat snapshots. Older entries keep
+            // their identity so their old base can never silently be replaced.
+            const chats = [...adoptions.values()].filter(item => item.path !== '/api/settings/get' && item.snapshot !== undefined);
+            if (chats.length > 6) chats[0].snapshot = undefined;
+            sendAdoption?.(message);
+        },
+        connectAdoptions(listener) {
+            sendAdoption = listener;
+            for (const message of adoptions.values()) listener(message);
+            return () => { if (sendAdoption === listener) sendAdoption = undefined; };
+        },
+        settleAdoption(key, id) {
+            if (adoptions.get(key)?.adoptionId === id) adoptions.delete(key);
+        },
+        async quickReplyRead(input, init) {
+            if (enabled && qualify(input, init) === '/api/settings/get') {
+                const controller = new AbortController();
+                const timer = setTimeout(() => controller.abort(), 8000);
+                try {
+                    const response = await host.fetch('/api/plugins/tavern-flow/quick-reply-presets', { ...init, signal: controller.signal });
+                    if (response.ok) {
+                        const value = await response.json();
+                        if (Array.isArray(value?.quickReplyPresets)) return Response.json(value);
+                    } else {
+                        void response.body?.cancel().catch(() => {});
+                    }
+                } catch { /* A missing plugin or failed small read uses the native route. */ }
+                finally { clearTimeout(timer); }
+            }
+            return host.fetch(input, init);
         },
         // Disabling affects new reads. In-flight reads keep recovery until they
         // finish, so toggling cannot reject an outstanding native getChat.

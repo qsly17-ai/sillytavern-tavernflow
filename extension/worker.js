@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { canonical, hashValue, diffValues } from './lib/protocol.mjs';
+import { canonical, hashValue, diffValues, chatFileName } from './lib/protocol.mjs';
 
 const PATHS = {
     '/api/settings/save': 'settings', '/api/settings/get': 'settings',
@@ -42,13 +42,13 @@ function patchFitsWithoutFull(value, patchLength, envelopeLength) {
 }
 
 // Exported for isolated protocol/transport tests; a browser worker starts it below.
-export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.bind(globalThis), postMessage = (message) => globalThis.postMessage(message) } = {}) {
+export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.bind(globalThis), postMessage = (message) => globalThis.postMessage(message), networkTimeoutMs = 90000 } = {}) {
     let config;
-    let preparation = Promise.resolve();
+    const preparations = new Map();
     const queues = new Map();
     const baselines = new Map();
+    const integrityRejections = new Map();
     const controllers = new Map();
-    let seedGeneration = 0;
     function remember(key, baseline) {
         baselines.delete(key);
         if (baseline.blocked) baseline = { hash: baseline.hash, blocked: baseline.blocked };
@@ -56,7 +56,7 @@ export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.
         // Keep only six complete snapshots. Hash-only entries still detect stale saves.
         let retained = 0;
         for (const [resource, entry] of [...baselines].reverse()) {
-            if (entry.value !== undefined && ++retained > 6) baselines.set(resource, { hash: entry.hash, generation: entry.generation });
+            if (entry.value !== undefined && ++retained > 6) baselines.set(resource, { hash: entry.hash });
         }
         // The page retains only concurrency metadata, never a full snapshot.
         // A later worker must check this same base instead of fetching a newer
@@ -82,14 +82,17 @@ export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.
         }
     }
     function resourceKey(kind, identity) {
-        // Native storage is keyed by avatar/file, not by the display name.
-        return `${kind}:${canonical(kind === 'chat' ? { avatar_url: identity.avatar_url, file_name: identity.file_name } : identity)}`;
+        // Compare exactly the filenames native persistence uses, even if two
+        // different request names sanitize to the same name on disk.
+        const storage = kind === 'chat' ? [identity.avatar_url.replace('.png', ''), chatFileName(identity.file_name) ?? identity.file_name]
+            : kind === 'group' ? [chatFileName(identity.id) ?? identity.id] : identity;
+        return `${kind}:${canonical(storage)}`;
     }
-    function enqueue(key, operation) {
-        const tail = (queues.get(key) ?? Promise.resolve()).then(operation);
+    function enqueue(tails, key, operation) {
+        const tail = (tails.get(key) ?? Promise.resolve()).then(operation);
         const settled = tail.catch(() => {});
-        queues.set(key, settled);
-        settled.then(() => { if (queues.get(key) === settled) queues.delete(key); });
+        tails.set(key, settled);
+        settled.then(() => { if (tails.get(key) === settled) tails.delete(key); });
         return tail;
     }
     async function encodeRequest(text, headers, allowCompression = true) {
@@ -107,31 +110,48 @@ export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.
         }
         return { headers: outgoing, body: bytes, bytes: bytes.byteLength, uncompressedBytes: bytes.byteLength, compressed: false };
     }
-    async function call(path, payload, headers, signal, credentials = 'same-origin') {
-        const encoded = await encodeRequest(JSON.stringify(payload), headers, false);
+    async function requestJson(path, encoded, signal, credentials = 'same-origin') {
         throwIfAborted(signal);
-        return requestFetch(config.baseUrl + path, { method: 'POST', body: encoded.body, headers: encoded.headers, credentials, signal, cache: 'no-store' });
+        const controller = new AbortController();
+        const onAbort = () => controller.abort(signal.reason);
+        signal.addEventListener('abort', onAbort, { once: true });
+        const timer = setTimeout(() => controller.abort(new DOMException('Save response timed out', 'TimeoutError')), networkTimeoutMs);
+        const aborted = new Promise((_, reject) => {
+            controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
+        });
+        try {
+            return await Promise.race([aborted, (async () => {
+                const response = await requestFetch(config.baseUrl + path, {
+                    method: 'POST', headers: encoded.headers, body: encoded.body, signal: controller.signal, credentials, cache: 'no-store',
+                });
+                return { response, body: await response.text() };
+            })()]);
+        } finally {
+            clearTimeout(timer);
+            signal.removeEventListener('abort', onAbort);
+        }
     }
     async function loadBaseline(kind, identity, key, headers, signal, credentials) {
-        const response = await call('/state', { kind, identity }, headers, signal, credentials);
-        if (!response.ok) return { response };
-        const data = await response.json();
+        const encoded = await encodeRequest(JSON.stringify({ kind, identity }), headers, false);
+        const { response, body } = await requestJson('/state', encoded, signal, credentials);
+        if (!response.ok) return { response, body };
+        const data = JSON.parse(body);
         if (data.ok !== true || !hashPattern.test(data.hash || '') || (kind === 'settings' ? !isObject(data.value) : !Array.isArray(data.value))) throw new Error('Invalid state response');
         const hash = await hashValue(data.value);
         if (hash !== data.hash) throw new Error('State hash mismatch');
-        const baseline = { value: data.value, hash, generation: ++seedGeneration };
+        const baseline = { value: data.value, hash };
         remember(key, baseline);
         return { baseline };
     }
-    async function relay(response, stats) {
-        return { type: 'response', status: response.status, statusText: response.statusText, headers: responseHeaders(response), body: await response.text(), stats: { ...stats, status: response.status } };
+    function relay(response, body, stats) {
+        return { type: 'response', status: response.status, statusText: response.statusText, headers: responseHeaders(response), body, stats: { ...stats, status: response.status } };
     }
     function localConflict(kind, reason, stats) {
         return { type: 'response', status: 409, statusText: 'Conflict', headers: [['content-type', 'application/json']], body: JSON.stringify({ ok: false, error: 'conflict', reason, message: '保存基线已过期或上次结果未确认；请重新读取后再保存。' }), stats: { ...stats, kind, mode: 'blocked', status: 409 } };
     }
     async function save(message, prepared, signal) {
         const started = performance.now();
-        const { kind, identity, key, value, text } = prepared;
+        const { kind, identity, key, value, text, force } = prepared;
         const originalBytes = encoder.encode(text).byteLength;
         const stats = { kind, originalBytes, sourceBytes: typeof message.body === 'string' ? originalBytes : message.body.byteLength, sentBytes: 0, stateFetched: false };
         let dispatched = false;
@@ -140,26 +160,30 @@ export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.
             throwIfAborted(signal);
             baseline = baselines.get(key);
             if (baseline?.blocked) return localConflict(kind, baseline.blocked, { ...stats, ms: performance.now() - started });
+            if (force && (!config.checkedIntegrityOverwrite || !baseline || baseline.hash !== integrityRejections.get(key))) {
+                return localConflict(kind, 'integrity-confirmation-outdated', stats);
+            }
             if (!baseline) {
                 stats.stateFetched = true;
                 const loaded = await loadBaseline(kind, identity, key, message.headers, signal, message.credentials);
-                if (loaded.response) return relay(loaded.response, { ...stats, mode: 'state-failed', ms: performance.now() - started });
+                if (loaded.response) return relay(loaded.response, loaded.body, { ...stats, mode: 'state-failed', ms: performance.now() - started });
                 baseline = loaded.baseline;
             }
             const nextHash = await hashValue(value);
             throwIfAborted(signal);
+            const resource = { kind, identity, ...(force ? { force: true } : {}) };
             let payload;
             let textPayload;
             if (nextHash === baseline.hash) {
-                payload = { kind, identity, mode: 'noop', baseHash: baseline.hash, nextHash };
+                payload = { ...resource, mode: 'noop', baseHash: baseline.hash, nextHash };
                 textPayload = JSON.stringify(payload);
             } else {
-                const full = { kind, identity, mode: 'full', baseHash: baseline.hash, nextHash };
+                const full = { ...resource, mode: 'full', baseHash: baseline.hash, nextHash };
                 if (baseline.value !== undefined) {
                     try {
                         const ops = diffValues(baseline.value, value);
                         if (ops.length && ops.length <= 2000) {
-                            const patch = { kind, identity, mode: 'patch', baseHash: baseline.hash, nextHash, ops };
+                            const patch = { ...resource, mode: 'patch', baseHash: baseline.hash, nextHash, ops };
                             const patchText = JSON.stringify(patch);
                             const overhead = JSON.stringify(full).length + ',"value":'.length;
                             if (patchFitsWithoutFull(value, patchText.length, overhead)) {
@@ -185,8 +209,7 @@ export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.
             throwIfAborted(signal);
             const networkStart = performance.now();
             dispatched = true;
-            const response = await requestFetch(config.baseUrl + '/save', { method: 'POST', headers: encoded.headers, body: encoded.body, signal, credentials: message.credentials ?? 'same-origin', cache: 'no-store' });
-            let body = await response.text();
+            let { response, body } = await requestJson('/save', encoded, signal, message.credentials);
             stats.networkMs = performance.now() - networkStart;
             stats.ms = performance.now() - started;
             stats.status = response.status;
@@ -197,50 +220,60 @@ export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.
                     remember(key, { ...baseline, blocked: 'unconfirmed-acknowledgement' });
                     return { type: 'response', status: 502, statusText: 'Bad Gateway', headers: [['content-type', 'application/json']], body: JSON.stringify({ ok: false, error: 'unconfirmed-save', message: '服务器未返回可核验的保存确认；请重新读取后再保存。' }), stats: { ...stats, status: 502 } };
                 }
-                remember(key, { value, hash: nextHash, generation: ++seedGeneration });
+                remember(key, { value, hash: nextHash });
+                if (force) integrityRejections.delete(key);
                 // Keep native fetch consumers' success contract; our checked
                 // hash acknowledgement belongs only to the worker protocol.
                 body = JSON.stringify(kind === 'settings' ? { result: 'ok' } : { ok: true });
             } else if (response.status === 409 || response.status >= 500) {
                 // Retaining a blocked baseline prevents a later queued stale snapshot from becoming a full overwrite.
                 remember(key, { ...baseline, blocked: response.status === 409 ? 'conflict' : 'unconfirmed-server-error' });
+            } else if (kind !== 'settings' && response.status === 400) {
+                try {
+                    if (JSON.parse(body)?.error === 'integrity') integrityRejections.set(key, baseline.hash);
+                } catch { /* A different refusal cannot authorize an overwrite. */ }
             }
-            return { type: 'response', status: response.status, statusText: response.statusText, headers: responseHeaders(response), body, stats };
+            return relay(response, body, stats);
         } catch (error) {
             if (dispatched) remember(key, { ...baseline, blocked: signal.aborted ? 'unconfirmed-aborted-save' : 'unconfirmed-network-result' });
             throw error;
         }
     }
-    async function seed(message, prepared) {
-        const { kind, identity, key } = prepared;
-        let value = JSON.parse(decoder.decode(message.responseBody));
-        let expectedHash;
-        if (kind === 'settings') {
-            if (!isObject(value) || typeof value.settings !== 'string') throw new Error('Missing native settings');
-            value = JSON.parse(value.settings);
-        } else if (isObject(value) && value.ok === true && Array.isArray(value.value)) {
-            expectedHash = value.hash;
-            value = value.value;
+    function seedStatus(message, kind, accepted) {
+        emit({ type: 'seed-status', kind, accepted, ...(accepted ? {} : { reason: 'invalid-baseline' }),
+            adoptionKey: message.adoptionKey, adoptionId: message.adoptionId });
+    }
+    async function seed(message, { kind, key }) {
+        try {
+            const snapshot = message.snapshot;
+            let value = kind === 'settings' ? JSON.parse(snapshot) : snapshot instanceof Blob ? JSON.parse(await snapshot.text()) : snapshot;
+            // Native single-chat reads can also return {} for a new, empty
+            // directory. The server still checks the actual file before saving.
+            if (kind === 'chat' && isObject(value) && Object.keys(value).length === 0) value = [];
+            if (kind === 'settings' ? !isObject(value) : !Array.isArray(value)) throw new Error('Invalid native baseline');
+            remember(key, { value, hash: await hashValue(value) });
+            seedStatus(message, kind, true);
+        } catch {
+            // An adopted snapshot that could not be retained must never be
+            // replaced with a fresh server hash for the old page contents.
+            remember(key, { hash: baselines.get(key)?.hash ?? '0'.repeat(64), blocked: 'missing-adopted-baseline' });
+            seedStatus(message, kind, false);
         }
-        if (kind === 'settings' ? !isObject(value) : !Array.isArray(value)) throw new Error('Invalid native baseline');
-        const hash = await hashValue(value);
-        if (expectedHash !== undefined && expectedHash !== hash) throw new Error('Native baseline hash mismatch');
-        remember(key, { value, hash, generation: ++seedGeneration });
-        emit({ type: 'seed-status', kind, accepted: true });
     }
     async function prepare(message) {
         const kind = PATHS[message.path];
         if (!kind) return;
-        const text = await decodeBody(message.body, message.headers);
-        const payload = JSON.parse(text);
+        const text = message.type === 'save' ? await decodeBody(message.body, message.headers) : undefined;
+        const payload = text === undefined ? message.identity : JSON.parse(text);
         const identity = identify(kind, payload);
         if (!identity) return;
         if (message.type === 'save' && kind !== 'settings') {
-            // Preserve native explicit-overwrite semantics and future envelope extensions.
+            // Unknown native envelope extensions remain the host's responsibility.
             const known = kind === 'chat' ? ['avatar_url', 'file_name', 'ch_name', 'chat', 'force'] : ['id', 'chat', 'force'];
-            if (payload.force === true || Object.keys(payload).some((key) => !known.includes(key)) || !Array.isArray(payload.chat)) return;
+            if (payload.force !== undefined && typeof payload.force !== 'boolean' ||
+                Object.keys(payload).some((key) => !known.includes(key)) || !Array.isArray(payload.chat)) return;
         }
-        return { kind, identity, key: resourceKey(kind, identity), value: kind === 'settings' ? payload : payload.chat, text };
+        return { kind, identity, key: resourceKey(kind, identity), value: kind === 'settings' ? payload : payload.chat, text, force: kind !== 'settings' && payload.force === true };
     }
     async function initialize(message) {
         try {
@@ -250,7 +283,8 @@ export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.
             const health = await response.json();
             if (!response.ok || health.ok !== true || health.protocol !== 1 || health.capabilities?.deltaSave !== true ||
                 !['settings', 'chat', 'group'].every((kind) => health.capabilities?.kinds?.includes(kind))) throw new Error('Backend protocol unavailable');
-            config = { baseUrl: url.href.replace(/\/$/, ''), gzip: health.requestGzip === true || health.capabilities?.requestGzip === true };
+            config = { baseUrl: url.href.replace(/\/$/, ''), gzip: health.requestGzip === true || health.capabilities?.requestGzip === true,
+                checkedIntegrityOverwrite: health.capabilities?.checkedIntegrityOverwrite === true };
             if (Array.isArray(message.baselines)) for (const entry of message.baselines) {
                 if (!Array.isArray(entry) || entry.length !== 2) continue;
                 const [key, baseline] = entry;
@@ -267,23 +301,24 @@ export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.
         if (!config) { emit({ id: message.id, error: { name: 'Error', code: 'not-ready', message: '清酌保存后台尚未就绪。' } }); return Promise.resolve(); }
         const controller = message.type === 'save' ? new AbortController() : null;
         if (controller) controllers.set(message.id, controller);
-        const prepared = preparation.then(async () => {
+        const kind = PATHS[message.path];
+        const prepared = enqueue(preparations, kind, async () => {
             try { return await prepare(message); } catch { return undefined; }
         });
-        preparation = prepared.then(() => {}, () => {});
         return prepared.then(async (data) => {
             if (!data) {
                 if (message.type === 'save') emit({ type: 'passthrough', id: message.id });
+                else seedStatus(message, kind, false);
                 return;
             }
-            return enqueue(data.key, async () => {
+            return enqueue(queues, data.key, async () => {
                 if (message.type === 'seed') return seed(message, data);
                 const result = await save(message, data, controller.signal);
                 emit({ id: message.id, ...result });
             });
         }).catch((error) => {
-            if (message.type === 'seed') emit({ type: 'seed-status', accepted: false, reason: 'invalid-baseline' });
-            else emit({ id: message.id, kind: PATHS[message.path], error: { name: error.name || 'Error', code: controller?.signal.aborted ? 'aborted' : 'request-failed', message: controller?.signal.aborted ? '保存请求已取消；若已发出，请重新读取后确认结果。' : '保存失败或结果未确认；请重新读取后再保存。' } });
+            if (message.type === 'seed') seedStatus(message, kind, false);
+            else emit({ id: message.id, kind, error: { name: error.name || 'Error', code: controller?.signal.aborted ? 'aborted' : error.name === 'TimeoutError' ? 'save-timeout' : 'request-failed', message: controller?.signal.aborted ? '保存请求已取消；若已发出，请重新读取后确认结果。' : '保存失败或结果未确认；请保留未保存的修改，再刷新重新读取。' } });
         }).finally(() => { if (controller) controllers.delete(message.id); });
     }
     return { handleMessage };

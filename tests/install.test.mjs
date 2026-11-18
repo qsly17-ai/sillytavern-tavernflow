@@ -7,13 +7,14 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 const hostRoot = process.env.TAVERNFLOW_HOST_ROOT;
 const installer = new URL('../scripts/install.py', import.meta.url).pathname;
-const hostFiles = ['public/script.js', 'public/scripts/group-chats.js', 'public/index.html'];
+const hostFiles = ['public/script.js', 'public/scripts/group-chats.js', 'public/scripts/extensions/quick-reply/index.js', 'public/index.html'];
+const verifiedFiles = [...hostFiles.slice(0, -1), 'public/scripts/events.js', 'src/endpoints/settings.js', 'src/endpoints/chats.js'];
 const ownDirectories = ['public/scripts/extensions/third-party/tavern-flow', 'plugins/tavern-flow'];
 const hash = data => createHash('sha256').update(data).digest('hex');
 async function createHost() {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tavernflow-install-review-'));
     await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'sillytavern', version: '1.19.0' }));
-    for (const relative of ['public/script.js', 'public/scripts/events.js', 'public/scripts/group-chats.js', 'src/endpoints/settings.js']) {
+    for (const relative of verifiedFiles) {
         await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true });
         await fs.copyFile(path.join(hostRoot, relative), path.join(root, relative));
     }
@@ -30,7 +31,7 @@ async function snapshot(root, paths) {
         if (stat.isDirectory()) {
             files[relative + '/'] = 'directory';
             for (const name of (await fs.readdir(path.join(root, relative))).sort()) await walk(path.join(relative, name));
-        } else files[relative] = { sha256: hash(await fs.readFile(path.join(root, relative))), mode: stat.mode & 0o777 };
+        } else files[relative] = { sha256: hash(await fs.readFile(path.join(root, relative))), mode: stat.mode & 0o777, uid: stat.uid, gid: stat.gid };
     }
     for (const relative of paths) await walk(relative);
     return files;
@@ -59,9 +60,10 @@ async function assertRecovery(root, prefix, before, result) {
     assert.equal(records.length, hostFiles.length);
     for (const record of records) {
         const relative = path.relative(root, record.target);
-        assert(hostFiles.includes(relative), 'Recovery is limited to the three owned host changes');
+        assert(hostFiles.includes(relative), 'Recovery is limited to the owned host changes');
         assert.equal(hash(await fs.readFile(record.backup)), record.sha256);
         assert.equal(record.sha256, before[relative].sha256);
+        assert.deepEqual([record.mode, record.uid, record.gid], [before[relative].mode, before[relative].uid, before[relative].gid]);
     }
 }
 
@@ -69,7 +71,7 @@ test('installer previews, preserves unrelated index bytes, rejects tampering and
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tavernflow-install-'));
     try {
         await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'sillytavern', version: '1.19.0' }));
-        for (const relative of ['public/script.js', 'public/scripts/events.js', 'public/scripts/group-chats.js', 'src/endpoints/settings.js']) {
+        for (const relative of verifiedFiles) {
             await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true });
             await fs.copyFile(path.join(hostRoot, relative), path.join(root, relative));
         }
@@ -100,7 +102,7 @@ test('native hooks preserve later unrelated core edits and reject hook tampering
     try {
         const original = new Map(await Promise.all(hostFiles.map(async relative => [relative, await fs.readFile(path.join(root, relative))])));
         const installed = runInstaller(root, '--apply'); assert.equal(installed.status, 0, installed.stderr);
-        for (const relative of hostFiles.slice(0, 2)) {
+        for (const relative of hostFiles.slice(0, -1)) {
             const file = path.join(root, relative);
             assert.match(await fs.readFile(file, 'utf8'), /TAVERNFLOW NATIVE READ/);
             await fs.appendFile(file, '\n// User edit after installation\r\n');
@@ -120,18 +122,22 @@ test('native hooks preserve later unrelated core edits and reject hook tampering
     } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
-test('a one-shot failure at each of the three host writes restores install and uninstall exactly', { skip: !hostRoot && 'Set TAVERNFLOW_HOST_ROOT to the pinned SillyTavern' }, async () => {
+test('each failed host write rolls back bytes and ownership; successful install and removal preserve permissions', { skip: !hostRoot && 'Set TAVERNFLOW_HOST_ROOT to the pinned SillyTavern' }, async () => {
     const root = await createHost();
     try {
         await fs.chmod(path.join(root, 'public/script.js'), 0o640);
+        if (process.getuid?.() === 0) await fs.chown(path.join(root, 'public/script.js'), 65534, 65534);
         const before = await snapshot(root, [...hostFiles, ...ownDirectories]);
-        for (let failAt = 1; failAt <= 3; failAt++) {
+        for (let failAt = 1; failAt <= hostFiles.length; failAt++) {
             assert.notEqual(failInstaller(root, failAt, false, '--apply').status, 0);
             assert.deepEqual(await snapshot(root, [...hostFiles, ...ownDirectories]), before, `install write ${failAt}`);
         }
         const installed = runInstaller(root, '--apply'); assert.equal(installed.status, 0, installed.stderr);
         const after = await snapshot(root, [...hostFiles, ...ownDirectories]);
-        for (let failAt = 1; failAt <= 3; failAt++) {
+        for (const relative of hostFiles) for (const property of ['mode', 'uid', 'gid']) {
+            assert.equal(after[relative][property], before[relative][property], `${relative} ${property}`);
+        }
+        for (let failAt = 1; failAt <= hostFiles.length; failAt++) {
             assert.notEqual(failInstaller(root, failAt, false, '--rollback', '--apply').status, 0);
             assert.deepEqual(await snapshot(root, [...hostFiles, ...ownDirectories]), after, `uninstall write ${failAt}`);
         }

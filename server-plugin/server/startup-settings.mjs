@@ -78,6 +78,7 @@ export function createFreshSettingsReader({ io = fs, getRuntimeConfig, concurren
         // JSON null/false/0 are valid native values and must not be filtered out.
         return items.filter(Boolean).map(item => item.value);
     }
+    const readQuickReplyPresets = request => readParsed(request.user.directories.quickreplies);
     async function read(request) {
         const started = performance.now();
         counters.requests++;
@@ -94,7 +95,7 @@ export function createFreshSettingsReader({ io = fs, getRuntimeConfig, concurren
                 readdir(directories.worlds),
                 readParsed(directories.themes),
                 readParsed(directories.movingUI),
-                readParsed(directories.quickreplies),
+                readQuickReplyPresets(request),
                 readParsed(directories.instruct),
                 readParsed(directories.context),
                 readParsed(directories.sysprompt),
@@ -125,7 +126,7 @@ export function createFreshSettingsReader({ io = fs, getRuntimeConfig, concurren
             counters.maxMs = Math.max(counters.maxMs, elapsed);
         }
     }
-    return { read, stats: () => ({ ...counters }) };
+    return { read, readQuickReplyPresets, stats: () => ({ ...counters }) };
 }
 
 function nativeRuntimeConfig(getConfigValue, parseBytes) {
@@ -157,7 +158,12 @@ export async function installFreshSettingsRoute({ hostRoot = process.cwd(), enab
         active = false;
         reason = 'disposed';
     };
-    const result = { status, dispose };
+    const result = {
+        status, dispose,
+        readQuickReplyPresets(request) {
+            if (active && layer?.handle === replacement) return reader.readQuickReplyPresets?.(request);
+        },
+    };
     if (!enabled) return result;
     try {
         const root = path.resolve(hostRoot);

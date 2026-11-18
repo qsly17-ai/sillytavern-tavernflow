@@ -1,9 +1,10 @@
-清酌 TavernFlow 0.4.0 · 中文使用说明
+清酌 TavernFlow 0.4.1 · 中文使用说明
 
-酒馆入口：顶部“扩展设置” → “清酌”，确认0.4.0及模块状态。
+酒馆入口：顶部“扩展设置” → “清酌”，确认 0.4.1 及模块状态。
 先复制未保存草稿，关闭全部旧酒馆标签页，再重新打开。
 
-本版增加弱网读取恢复、完整设置响应压缩和更早接管后台差量保存。
+本版修复多设备保存冲突、慢读取拖住保存和部分角色名保存失败。
+Quick Reply 优先单独下载快捷回复预设，保留原生读取作为后备。
 读取没有进展或响应不完整时自动重试一次；连续失败，网络恢复后点击“重试读取”。
 若提示读取期间聊天已切换，请先保留草稿，再点“重新加载酒馆”。
 原生数据、事件和业务插件继续处理完整内容；不伪造空聊天，不自动重试写入。
@@ -22,11 +23,13 @@
 安装：python3 scripts/install.py --host /你的/SillyTavern --apply
 卸载预览：python3 scripts/install.py --host /你的/SillyTavern --rollback
 卸载：python3 scripts/install.py --host /你的/SillyTavern --rollback --apply
-安装/卸载后重启酒馆。已有同名目录须先核验回滚，不直接覆盖。
+从 0.4.0 升级：备份并停止酒馆，用新版安装器回退旧版，再安装新版并重启。
+已有同名目录须先核验回退，不直接覆盖。
 不要把仓库或ZIP网址填入酒馆扩展安装框，配套服务端需一起安装。
 
 本包包含同版源码、安装副本、测试和脱敏报告。详见：
 README.md
+reports/acceptance-0.4.1.md
 reports/acceptance-0.4.md
 reports/runtime-0.4.json
 reports/review-0.4.md

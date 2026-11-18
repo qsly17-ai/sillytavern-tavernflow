@@ -3,7 +3,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { createHash } from 'node:crypto';
-import { canonical, hashValue, applyOps } from '../shared/protocol.mjs';
+import { canonical, hashValue, applyOps, chatFileName } from '../shared/protocol.mjs';
 import { installFreshSettingsRoute } from './startup-settings.mjs';
 
 export const info = {
@@ -11,7 +11,7 @@ export const info = {
     name: '清酌 TavernFlow',
     description: 'Independent background delta saves and native-equivalent token batching for SillyTavern 1.19.',
 };
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 const HASH = /^[a-f0-9]{64}$/;
 const KINDS = new Set(['settings', 'chat', 'group']);
 const REMOTE_TOKENIZERS = new Set(['qwen2', 'command-r', 'command-a', 'nemo', 'deepseek']);
@@ -64,17 +64,20 @@ async function resourceFor(request, body, validateUser) {
         filePath = path.join(root, 'settings.json');
     } else if (kind === 'chat') {
         const avatar = fileComponent(identity.avatar_url);
-        const fileName = fileComponent(identity.file_name);
+        const fileName = chatFileName(identity.file_name);
+        if (!fileName) bad('invalid_identity');
         if (!avatar.endsWith('.png')) bad('invalid_identity');
         // The installed core uses replace('.png', ''), rather than path.parse().name.
         cardName = fileComponent(avatar.replace('.png', ''));
         if (typeof directories.chats !== 'string') bad('invalid_user_directory');
-        filePath = path.resolve(directories.chats, cardName, `${fileName}.jsonl`);
+        filePath = path.resolve(directories.chats, cardName, fileName);
     } else {
         const id = typeof identity.id === 'number' && Number.isSafeInteger(identity.id) ? String(identity.id) : identity.id;
-        cardName = fileComponent(id);
+        const fileName = chatFileName(id);
+        if (!fileName) bad('invalid_identity');
+        cardName = id;
         if (typeof directories.groupChats !== 'string') bad('invalid_user_directory');
-        filePath = path.resolve(directories.groupChats, `${cardName}.jsonl`);
+        filePath = path.resolve(directories.groupChats, fileName);
     }
     if (typeof directories.backups !== 'string' || !under(root, path.resolve(directories.backups))) bad('invalid_user_directory');
     await noSymlinkEscape(root, filePath);
@@ -91,7 +94,7 @@ async function fileStat(filePath) {
 }
 
 /** Injectable persistence keeps unit tests independent of any installed host. */
-export function createHandlers({ persistence, validateUser, maxFileBytes = 128 * 1024 * 1024, maxCacheBytes = 64 * 1024 * 1024, maxResources = 32, getStartupStatus } = {}) {
+export function createHandlers({ persistence, validateUser, maxFileBytes = 128 * 1024 * 1024, maxCacheBytes = 64 * 1024 * 1024, maxResources = 32, getStartupStatus, readQuickReplyPresets } = {}) {
     if (!persistence || typeof persistence.saveChat !== 'function' || typeof persistence.saveSettings !== 'function') {
         throw new TypeError('Native persistence adapters are required');
     }
@@ -179,7 +182,8 @@ export function createHandlers({ persistence, validateUser, maxFileBytes = 128 *
         try {
             const body = request.body;
             const resource = await resourceFor(request, body, validateUser);
-            if (!['full', 'patch', 'noop'].includes(body.mode) || !HASH.test(body.baseHash) || !HASH.test(body.nextHash)) bad('invalid_save');
+            if (!['full', 'patch', 'noop'].includes(body.mode) || !HASH.test(body.baseHash) || !HASH.test(body.nextHash) ||
+                (body.force !== undefined && (resource.kind === 'settings' || body.force !== true))) bad('invalid_save');
             const result = await serial(resource.key, async () => {
                 const current = await read(resource);
                 if (current.hash !== body.baseHash) {
@@ -207,11 +211,11 @@ export function createHandlers({ persistence, validateUser, maxFileBytes = 128 *
                     }
                     try {
                         if (resource.kind === 'settings') await persistence.saveSettings(next, resource, request);
-                        else await persistence.saveChat(next, resource, request);
+                        else await persistence.saveChat(next, resource, request, body.force === true);
                     } catch (error) {
                         forget(resource.key);
                         if (error?.constructor?.name === 'IntegrityMismatchError' || error?.code === 'integrity') {
-                            throw new FlowError(409, 'integrity');
+                            throw new FlowError(400, 'integrity');
                         }
                         throw error;
                     }
@@ -253,18 +257,30 @@ export function createHandlers({ persistence, validateUser, maxFileBytes = 128 *
             return response.json({ ok: true, results, nativeEquivalent: true });
         } catch (error) { return respondError(response, error); }
     }
+    async function quickReplyPresets(request, response) {
+        try {
+            const user = request.user;
+            if (!user?.profile?.handle) throw new FlowError(401, 'authentication_required');
+            if (validateUser && !await validateUser(user)) throw new FlowError(403, 'invalid_user');
+            await noSymlinkEscape(path.resolve(user.directories.root), path.resolve(user.directories.quickreplies));
+            const presets = await readQuickReplyPresets?.(request);
+            if (!Array.isArray(presets)) throw new FlowError(503, 'quick_reply_presets_unavailable');
+            response.set?.('Cache-Control', 'no-store');
+            return response.json({ quickReplyPresets: presets });
+        } catch (error) { return respondError(response, error); }
+    }
     function health(_request, response) {
         response.set?.('Cache-Control', 'no-store');
         return response.json({
             ok: true, version: VERSION, protocol: 1, startup: getStartupStatus?.(), hostVersion: persistence.hostVersion || 'injected',
-            capabilities: { deltaSave: true, kinds: [...KINDS], nativePersistence: true, requestGzip: persistence.requestGzip === true,
+            capabilities: { deltaSave: true, kinds: [...KINDS], nativePersistence: true, requestGzip: persistence.requestGzip === true, checkedIntegrityOverwrite: true,
                 tokenBatch: typeof persistence.countTokens === 'function', nativeEquivalentTokens: true,
                 tokenEndpoint: '/openai/count', excludedTokenizers: [...REMOTE_TOKENIZERS] },
             limits: { maxFileBytes, tokenBatch: 64, tokenTextBytes: 4 * 1024 * 1024 },
             coverage: { pluginRequestsSerialized: true, nativeAndThirdPartyWritesSerialized: false },
         });
     }
-    return { state, save, health, tokens, stats: () => ({ ...counters, cachedResources: cache.size, cachedBytes, activeResources: locks.size }),
+    return { state, save, health, tokens, quickReplyPresets, stats: () => ({ ...counters, cachedResources: cache.size, cachedBytes, activeResources: locks.size }),
         dispose() { cache.clear(); tokenCache.clear(); cachedBytes = 0; } };
 }
 
@@ -292,7 +308,7 @@ async function invokeNative(handler, request, body, query = {}) {
 export async function loadNativePersistence(hostRoot = process.cwd()) {
     const hostPath = path.resolve(hostRoot);
     const packageInfo = JSON.parse(await fs.readFile(path.join(hostPath, 'package.json'), 'utf8'));
-    if (packageInfo.name !== 'sillytavern' || packageInfo.version !== '1.19.0') throw new Error('TavernFlow 0.2 requires verified SillyTavern 1.19.0');
+    if (packageInfo.name !== 'sillytavern' || packageInfo.version !== '1.19.0') throw new Error('TavernFlow requires verified SillyTavern 1.19.0');
     const hostImport = file => import(pathToFileURL(path.join(hostPath, file)).href);
     const [chats, settings, users] = await Promise.all([
         hostImport('src/endpoints/chats.js'), hostImport('src/endpoints/settings.js'), hostImport('src/users.js'),
@@ -306,11 +322,11 @@ export async function loadNativePersistence(hostRoot = process.cwd()) {
         validateUser(user) {
             if (typeof user?.profile?.handle !== 'string') return false;
             const expected = users.getUserDirectories(user.profile.handle);
-            return ['root', 'chats', 'groupChats', 'backups'].every(key => typeof user.directories?.[key] === 'string' &&
+            return ['root', 'chats', 'groupChats', 'backups', 'quickreplies'].every(key => typeof user.directories?.[key] === 'string' &&
                 path.resolve(user.directories[key]) === path.resolve(expected[key]));
         },
-        async saveChat(value, resource) {
-            await chats.trySaveChat(value, resource.filePath, false, resource.user.profile.handle, resource.cardName, resource.user.directories.backups);
+        async saveChat(value, resource, _request, force) {
+            await chats.trySaveChat(value, resource.filePath, force, resource.user.profile.handle, resource.cardName, resource.user.directories.backups);
         },
         async saveSettings(value, resource, request) {
             const result = await invokeNative(saveSettings, { ...request, user: resource.user }, value);
@@ -330,11 +346,13 @@ let activeHandlers, startup;
 export async function init(router) {
     const persistence = await loadNativePersistence();
     startup = await installFreshSettingsRoute({ enabled: true });
-    activeHandlers = createHandlers({ persistence, validateUser: persistence.validateUser, getStartupStatus: () => startup.status() });
+    activeHandlers = createHandlers({ persistence, validateUser: persistence.validateUser, getStartupStatus: () => startup.status(),
+        readQuickReplyPresets: startup.readQuickReplyPresets });
     router.get('/health', activeHandlers.health);
     router.post('/state', activeHandlers.state);
     router.post('/save', activeHandlers.save);
     router.post('/tokens', activeHandlers.tokens);
+    router.post('/quick-reply-presets', activeHandlers.quickReplyPresets);
     console.info('[TavernFlow] native persistence adapter ready (SillyTavern 1.19.0)');
 }
 export async function exit() { startup?.dispose(); activeHandlers?.dispose(); }

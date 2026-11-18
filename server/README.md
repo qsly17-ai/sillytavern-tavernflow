@@ -6,7 +6,7 @@
 
 | 调用点 | 来源 | 用途 |
 | --- | --- | --- |
-| `trySaveChat(chatData,filePath,false,handle,cardName,backups)` | `src/endpoints/chats.js:532` | 原生完整性校验、原子写入、按聊天限频备份 |
+| `trySaveChat(chatData,filePath,force,handle,cardName,backups)` | `src/endpoints/chats.js:532` | 原生完整性校验、原子写入、按聊天限频备份；确认覆盖仍需通过当前文件哈希检查 |
 | `router` 的 `POST /save` 单处理函数 | `src/endpoints/settings.js:206` | 原生设置格式、原子写入、十分钟设置快照；额外检查 `{result:'ok'}`，防止该原生接口将错误按 HTTP 200 返回 |
 | `getUserDirectories(handle)` | `src/users.js:683` | 核对认证中间件提供的用户目录，客户端不能指定其他用户文件 |
 | `router` 的 `POST /openai/count` 单处理函数 | `src/endpoints/tokenizers.js:916` | 批量合并、结果缓存，完整保留原生响应 |
@@ -32,3 +32,5 @@ TAVERNFLOW_HOST_ROOT=/实际/SillyTavern目录 node --test tests/backend-native.
 `startup-settings.mjs`仅在1.19.0的settings.js整文件及/get回调双指纹匹配时，内存替换/get单回调。保持所有原生键、字符串内容、排序和false/null/0；每次全新读取，异步I/O全局上限8，dispose按所有权恢复。默认启用；无磁盘核心补丁，不缓存响应。health.startup.active报告实际接管状态。
 
 完整HTTP测试含原生Express response.send、JSON序列化和ETag，见`reports/startup-http-benchmark.md`。合成29.6MB响应逐次SHA一致，单请求中位+2.4%，四并发中位-18.0%；目标是降低同步阻塞，不代表所有首屏更快。
+
+从 0.4.1 起，`POST /quick-reply-presets` 在同一适配激活时复用完整设置读取的 Quick Reply 文件顺序和解析逻辑。请求受宿主登录与 CSRF 保护；没有为该接口缓存文件内容。

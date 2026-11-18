@@ -23,7 +23,7 @@ export function mountPanel({ onChange }) {
       <p class="tf-note">MVU、酒馆助手、提示词模板、小白X与数据库仍负责原有功能。含 iframe 的楼层保持实时。</p>
       <button type="button" class="tf-load-retry menu_button" hidden>重试网络读取</button>
       <details class="tf-diagnostics"><summary>模块状态</summary><dl></dl></details>
-      <small class="tf-version">0.4.0 · SillyTavern 1.19.0</small></div></details>`;
+      <small class="tf-version">0.4.1 · SillyTavern 1.19.0</small></div></details>`;
     const switches = root.querySelector('.tf-switches');
     const choices = [['enabled', '启用清酌'], ['sourceGuard', '重前端加载减负'], ['startupPreload', '首屏并行预取（试验，下次打开生效）'], ['transport', '后台差量保存'], ['render', '历史文字绘制减负'], ['tokens', '合并并发 Token 计数'], ['fastPaths', '命令与正则快速路径'], ['quickDrawers', '抽屉即时展开'], ['interactions', '预设开关即时响应'], ['lightweightDrag', '轻量拖影（试验）']];
     for (const [key, label] of choices) {

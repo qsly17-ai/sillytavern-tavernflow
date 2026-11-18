@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, copyFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { hashValue, applyOps, canonical, diffValues } from '../shared/protocol.mjs';
+import { hashValue, applyOps, canonical, diffValues, chatFileName } from '../shared/protocol.mjs';
 
 const fixture = await mkdtemp(path.join(os.tmpdir(), 'tf-worker-'));
 await mkdir(path.join(fixture, 'lib'));
@@ -18,13 +18,14 @@ async function decodeRequest(init) {
     if (new Headers(init.headers).get('content-encoding') === 'gzip') return JSON.parse(await new Response(new Blob([init.body]).stream().pipeThrough(new DecompressionStream('gzip'))).text());
     return JSON.parse(await new Blob([init.body]).text());
 }
-const key = (kind, identity) => `${kind}:${canonical(identity)}`;
-function harness(values = new Map(), intercept) {
+const key = (kind, identity) => `${kind}:${canonical(kind === 'chat' ? [identity.avatar_url.replace('.png', ''), chatFileName(identity.file_name)] :
+    kind === 'group' ? [chatFileName(String(identity.id))] : identity)}`;
+function harness(values = new Map(), intercept, networkTimeoutMs) {
     const events = [];
     const calls = [];
-    const runtime = createTransportRuntime({ postMessage: (message) => events.push(message), fetch: async (url, init = {}) => {
+    const runtime = createTransportRuntime({ networkTimeoutMs, postMessage: (message) => events.push(message), fetch: async (url, init = {}) => {
         const route = new URL(url).pathname.split('/').at(-1);
-        if (route === 'health') return json({ ok: true, protocol: 1, capabilities: { deltaSave: true, kinds: ['settings', 'chat', 'group'], requestGzip: true } });
+        if (route === 'health') return json({ ok: true, protocol: 1, capabilities: { deltaSave: true, kinds: ['settings', 'chat', 'group'], requestGzip: true, checkedIntegrityOverwrite: true } });
         const payload = await decodeRequest(init);
         calls.push({ route, payload, init });
         const special = await intercept?.({ route, payload, init, values });
@@ -39,12 +40,13 @@ function harness(values = new Map(), intercept) {
         values.set(resource, next);
         return json({ ok: true, hash: payload.nextHash, mode: payload.mode });
     } });
-    return { runtime, events, calls, values, async init(baselines) { await runtime.handleMessage({ type: 'init', baseUrl: 'https://st.test/api/plugins/tavern-flow', origin: 'https://st.test', headers: [['x-csrf-token', 'test']], baselines }); }, async save(id, kind, value, identity = {}) {
-        const body = JSON.stringify(kind === 'settings' ? value : { ...identity, chat: value });
+    return { runtime, events, calls, values, async init(baselines) { await runtime.handleMessage({ type: 'init', baseUrl: 'https://st.test/api/plugins/tavern-flow', origin: 'https://st.test', headers: [['x-csrf-token', 'test']], baselines }); }, async save(id, kind, value, identity = {}, force = false) {
+        const body = JSON.stringify(kind === 'settings' ? value : { ...identity, chat: value, force });
         await runtime.handleMessage({ type: 'save', id, path: kind === 'settings' ? '/api/settings/save' : kind === 'chat' ? '/api/chats/save' : '/api/chats/group/save', body, headers: [['content-type', 'application/json'], ['x-csrf-token', 'test']] });
         return events.find((event) => event.id === id);
     }, async seed(kind, value, identity = {}) {
-        await runtime.handleMessage({ type: 'seed', path: kind === 'settings' ? '/api/settings/get' : kind === 'chat' ? '/api/chats/get' : '/api/chats/group/get', body: JSON.stringify(identity), responseBody: new TextEncoder().encode(JSON.stringify(kind === 'settings' ? { settings: JSON.stringify(value) } : value)), headers: [['content-type', 'application/json']] });
+        await runtime.handleMessage({ type: 'seed', path: kind === 'settings' ? '/api/settings/get' : kind === 'chat' ? '/api/chats/get' : '/api/chats/group/get',
+            identity, snapshot: kind === 'settings' ? JSON.stringify(value) : new Blob([JSON.stringify(value)]) });
     } };
 }
 
@@ -149,13 +151,67 @@ test('native gzip input is decoded in the worker and large full payloads are gzi
     assert.deepEqual(h.values.get(key('settings', {})), value);
 });
 
-test('explicit force and future envelope fields pass through without an optimized write', async () => {
+test('future or unsupported envelope fields pass through without an optimized write', async () => {
     const h = harness(); await h.init();
-    for (const [id, extra] of [[1, { force: true }], [2, { futureOption: true }]]) {
+    for (const [id, extra] of [[1, { force: 'nonstandard' }], [2, { futureOption: true }]]) {
         await h.runtime.handleMessage({ type: 'save', id, path: '/api/chats/group/save', body: JSON.stringify({ id: 'x', chat: [], ...extra }), headers: [] });
         assert.equal(h.events.find((event) => event.id === id).type, 'passthrough');
     }
     assert.equal(h.calls.length, 0);
+});
+
+test('different names for the same native file share the adopted baseline and save queue', async () => {
+    const loadedAs = { avatar_url: 'test.png', file_name: '侦探: 林' };
+    const savedAs = { ...loadedAs, file_name: '侦探 林' };
+    const old = [{ mes: 'old' }], first = [{ mes: 'first' }], second = [{ mes: 'second' }];
+    const h = harness(new Map([[key('chat', loadedAs), old]]));
+    await h.init();
+    const seed = h.seed('chat', old, loadedAs);
+    const firstSave = h.save(1, 'chat', first, savedAs);
+    const secondSave = h.save(2, 'chat', second, loadedAs);
+    const [, a, b] = await Promise.all([seed, firstSave, secondSave]);
+    assert.deepEqual([a.status, b.status], [200, 200]);
+    assert.deepEqual(h.calls.map(call => call.route), ['save', 'save']);
+    assert.deepEqual(h.values.get(key('chat', savedAs)), second);
+});
+
+test('a stalled acknowledgement body times out without retry and blocks another save of that resource', async () => {
+    const resource = key('settings', {});
+    const initial = { version: 'loaded' }, committed = { version: 'committed' };
+    let seenSignal;
+    const h = harness(new Map([[resource, initial]]), ({ route, init, values }) => {
+        if (route !== 'save') return;
+        seenSignal = init.signal;
+        values.set(resource, committed);
+        return new Response(new ReadableStream({ start(body) {
+            body.enqueue(new TextEncoder().encode('{"ok":'));
+            init.signal.addEventListener('abort', () => body.error(init.signal.reason), { once: true });
+        } }));
+    }, 30);
+    await h.init();
+    await h.seed('settings', initial);
+    assert.equal((await h.save(1, 'settings', committed)).error.code, 'save-timeout');
+    assert.equal(seenSignal.aborted, true);
+    assert.equal((await h.save(2, 'settings', initial)).status, 409);
+    assert.deepEqual(h.calls.map(call => call.route), ['save']);
+    assert.deepEqual(h.values.get(resource), committed);
+});
+
+test('integrity confirmation is bound to the rejected version, even after a newer save in the same tab', async () => {
+    const identity = { id: 'integrity-retry' };
+    const resource = key('group', identity);
+    const initial = [{ mes: 'loaded' }], rejected = [{ mes: 'needs confirmation' }], newer = [{ mes: 'newer' }];
+    const h = harness(new Map([[resource, initial]]), ({ route, payload }) => {
+        if (route === 'save' && !payload.force && payload.nextHash === expectedHash) return json({ ok: false, error: 'integrity' }, 400);
+    });
+    const expectedHash = await hashValue(rejected);
+    await h.init();
+    await h.seed('group', initial, identity);
+    assert.equal((await h.save(1, 'group', rejected, identity)).status, 400);
+    assert.equal((await h.save(2, 'group', newer, identity)).status, 200);
+    assert.equal((await h.save(3, 'group', rejected, identity, true)).status, 409);
+    assert.deepEqual(h.calls.map(call => call.route), ['save', 'save']);
+    assert.deepEqual(h.values.get(resource), newer);
 });
 
 test('abort reaches an in-flight request, then the resource stays blocked', async () => {

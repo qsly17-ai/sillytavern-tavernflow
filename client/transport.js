@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The page only captures requests. JSON work and all optimized I/O live in worker.js.
 const SAVE_PATHS = new Set(['/api/settings/save', '/api/chats/save', '/api/chats/group/save']);
-const LOAD_PATHS = new Set(['/api/settings/get', '/api/chats/get', '/api/chats/group/get']);
 // A worker lifecycle is shorter than the page's in-memory chat lifecycle.
 // Recreating the worker must never turn a rejected old snapshot into a new base.
 const RELOAD_REQUIRED = new WeakMap();
@@ -9,7 +8,7 @@ const RELOAD_REQUIRED = new WeakMap();
 // old in-memory chat, even after its performance modules have been toggled.
 const PAGE_BASELINES = new WeakMap();
 const hashPattern = /^[a-f0-9]{64}$/;
-const reloadError = () => new Error('清酌发现保存冲突或上次保存结果未确认；请刷新页面并重新读取后再保存。');
+const reloadError = () => new Error('清酌发现保存冲突或上次保存结果未确认；请先保留未保存的修改，再刷新页面并重新读取。');
 function targetsSave(input, init, location) {
     try {
         const url = new URL(typeof input === 'string' || input instanceof URL ? input : input?.url, location.href);
@@ -55,12 +54,24 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
     let failed = false;
     let terminated = false;
     let serial = 0;
-    let dispatch = Promise.resolve();
+    let disconnectAdoptions;
+    const dispatches = new Map();
+    const boot = host.__tavernFlowBoot;
     const pending = new Map();
     const idleWaiters = [];
     const waitForIdle = () => pending.size ? new Promise((resolve) => idleWaiters.push(resolve)) : Promise.resolve();
     const startupTimer = setTimeout(() => fail('worker-start-timeout'), 15000);
-    function terminate() { if (!terminated) { terminated = true; worker.terminate(); } }
+    function terminate() {
+        if (terminated) return;
+        terminated = true;
+        disconnectAdoptions?.();
+        worker.terminate();
+    }
+    function dispatch(path, operation) {
+        const tail = (dispatches.get(path) ?? Promise.resolve()).then(operation);
+        dispatches.set(path, tail);
+        void tail.then(() => { if (dispatches.get(path) === tail) dispatches.delete(path); });
+    }
     function drain() {
         state.pending = pending.size;
         if (pending.size) return;
@@ -110,13 +121,25 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
         if (data.type === 'ready') {
             clearTimeout(startupTimer);
             if (stopped || failed) { drain(); return; }
+            disconnectAdoptions = boot?.connectAdoptions?.((message) => {
+                // Adoption is synchronous with using the native data. Queue
+                // only the already received snapshot, never a network read.
+                dispatch(message.path.replace(/\/get$/, '/save'), () => {
+                    try { if (!terminated) worker.postMessage(message); }
+                    catch { fail('worker-message-failed'); }
+                });
+            });
             state.enabled = true;
             state.reason = 'active';
             emit({ event: 'status', ...snapshot() });
             return;
         }
         if (data.type === 'unavailable') { fail(data.reason || 'backend-unavailable'); return; }
-        if (data.type === 'seed-status') { emit({ event: 'seed', kind: data.kind, accepted: data.accepted, reason: data.reason }); return; }
+        if (data.type === 'seed-status') {
+            boot?.settleAdoption?.(data.adoptionKey, data.adoptionId);
+            emit({ event: 'seed', kind: data.kind, accepted: data.accepted, reason: data.reason });
+            return;
+        }
         const entry = pending.get(data.id);
         if (!entry) return;
         pending.delete(data.id);
@@ -124,7 +147,10 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
         if (data.type === 'passthrough') {
             state.bypassed++;
             // The worker has not dispatched a save. Preserve the original request and its fetch chain.
-            if (!entry.aborted) entry.resolve(original.apply(entry.receiver, entry.args));
+            if (!entry.aborted) {
+                if (RELOAD_REQUIRED.has(host)) entry.reject(reloadError());
+                else entry.resolve(original.apply(entry.receiver, entry.args));
+            }
         } else if (data.error) {
             state.failures++;
             requireReload(data.error.code || 'unconfirmed-save');
@@ -152,7 +178,7 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
     function qualify(input, init) {
         let url;
         try { url = new URL(typeof input === 'string' || input instanceof URL ? input : input?.url, here.href); } catch { return; }
-        if (url.origin !== here.origin || !SAVE_PATHS.has(url.pathname) && !LOAD_PATHS.has(url.pathname)) return;
+        if (url.origin !== here.origin || !SAVE_PATHS.has(url.pathname)) return;
         const method = String(init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
         if (method !== 'POST') return;
         // Unload requests and anonymous requests retain their native semantics.
@@ -160,7 +186,7 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
         try {
             // A native JSON string must not be UTF-8 encoded into a Request and then
             // copied back out on the page. Validate only its small request metadata.
-            if (!(input instanceof Request) && typeof init?.body === 'string' && SAVE_PATHS.has(url.pathname)) {
+            if (!(input instanceof Request) && typeof init?.body === 'string') {
                 const headers = new Headers(init.headers);
                 const encoding = (headers.get('content-encoding') || '').toLowerCase().trim();
                 if (!encoding && (headers.get('content-type') || '').toLowerCase().includes('application/json')) {
@@ -175,21 +201,6 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
             if (!contentType.includes('application/json')) return;
             return { request, path: url.pathname, encoding };
         } catch { return; }
-    }
-    function observe(request, path, response) {
-        if (!response.ok || stopped || failed) return;
-        let copy;
-        try { copy = response.clone(); } catch { return; }
-        // Reserve message order now, before the caller can consume and mutate the loaded data.
-        const bodies = Promise.all([request.arrayBuffer(), copy.arrayBuffer()]);
-        void bodies.catch(() => {});
-        dispatch = dispatch.then(async () => {
-            try {
-                const [body, responseBody] = await bodies;
-                if (stopped || failed) return;
-                worker.postMessage({ type: 'seed', path, body, responseBody, headers: [...request.headers] }, [body, responseBody]);
-            } catch { /* A failed optional observation cannot affect the native response. */ }
-        });
     }
     function isNativeSave(input, init) {
         return targetsSave(input, init, here);
@@ -208,10 +219,6 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
         const target = qualify(input, init);
         if (!target) return original.apply(this, arguments);
         const { request, path } = target;
-        if (LOAD_PATHS.has(path)) {
-            const result = original.apply(this, arguments);
-            return Promise.resolve(result).then((response) => { observe(request, path, response); return response; });
-        }
         if (request.signal.aborted) return Promise.reject(request.signal.reason ?? new DOMException('Aborted', 'AbortError'));
         const id = ++serial;
         const args = [...arguments];
@@ -237,7 +244,7 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
             const body = target.stringBody !== undefined ? Promise.resolve(target.stringBody) : request.arrayBuffer();
             void body.catch(() => {});
             // Strings are cloned directly; binary and pre-gzipped bodies transfer their buffers.
-            dispatch = dispatch.then(async () => {
+            dispatch(path, async () => {
                 try {
                     const bytes = await body;
                     if (!pending.has(id) || failed) return;
@@ -268,6 +275,7 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
         dispose() {
             if (stopped) return waitForIdle();
             stopped = true;
+            disconnectAdoptions?.();
             state.enabled = false;
             state.reason = state.requiresReload ? 'reload-required' : 'disposed';
             clearTimeout(startupTimer);

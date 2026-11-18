@@ -1,4 +1,4 @@
-# 清酌 0.4.0 兼容与数据合同
+# 清酌 0.4.1 兼容与数据合同
 
 目标宿主：SillyTavern 1.19.0（7e8663cd9）。浏览器扩展和配套服务端插件共同提供优化，不依赖鸡尾酒、柏宝箱或旧线性补丁。
 
@@ -14,23 +14,24 @@ API 前缀 `/api/plugins/tavern-flow`。
 
 - `POST /save`：`{kind:settings|chat|group,identity,mode:full|patch|noop,baseHash,nextHash,value?,ops?}`。
 - 单聊 identity 为 `{avatar_url,file_name,ch_name}`，群聊为 `{id}`，设置为 `{}`。
-- 成功返回 `200 {ok:true,hash,mode}`；冲突返回 `409 {ok:false,error:conflict,hash}`；错误不伪报成功，不盲目重试全量覆盖。
+- 成功返回 `200 {ok:true,hash,mode}`；版本冲突返回 `409 {ok:false,error:conflict,hash}`。确认在写入前由原生完整性校验拒绝时返回 `400 {ok:false,error:integrity}`；原生对话框确认后可带 `force:true` 重试聊天保存，仍接受原版本哈希校验。Worker 只接受该资源与该版本已经出现的完整性拒绝。
 - `POST /state`：`{kind,identity}`，返回 `{ok:true,hash,value}`。
 - `GET /health`：只报告版本与能力，不返回私人内容。
+- `POST /quick-reply-presets`：经宿主认证，仅读取当前用户的新鲜 `{quickReplyPresets}`；已核验的异步读取适配不可用时回退到原生设置入口。
 
 `shared/protocol.mjs` 提供规范化、SHA-256、差量与差量应用。操作为 `{op:set|delete,path,value?}` 或 `{op:splice,path,index,deleteCount,items}`。客户端使用 Worker 处理解析、哈希、差量和提交；同资源排队，服务端调用目标宿主原生保存函数。
 
-上述队列不覆盖原生及其他写入者，不是全局存档锁。首次页面读取基线和跨页面并发边界见 README。冲突或结果未确认时，保留未保存内容，再刷新读取。
+设置及聊天的基线由原生采用入口交接；普通背景读取不参与。文件名先按原生规则转换，再确定聊天队列。上述队列不覆盖原生及其他写入者。冲突或结果未确认时，保留未保存内容，再刷新读取。
 
 ## 验证与回退
 
-同版源码测试、真实宿主适配、隔离运行和独立审查的结果见 `reports/acceptance-0.4.md`、`runtime-0.4.json`、`review-0.4.md`。报告对应固定发行包，不替代其他版本、全部辅助模型或手机真机验证。
+本版证据见 `reports/acceptance-0.4.1.md`。0.4.0 的历史验收和审查见 `reports/acceptance-0.4.md`、`reports/review-0.4.md`。
 
-安装器管理自己的两个目录、index内自有块，以及经完整源码指纹校验的两处原生聊天读取标记。回退先核对安装哈希；文件被后续修改时拒绝自动删除。完整安装与回退需要服务器管理权限及重启对应酒馆实例。
+安装器管理自己的两个目录、index 内自有块，以及三个原生脚本中经完整源码指纹校验的读取标记。回退先核对安装哈希；文件被后续修改时拒绝自动删除。安装、升级和回退保留原文件属主、组和模式。
 
 用户已验收当前 0.3.0。后续改进依实际反馈开展，不承诺所有设备和所有卡片的固定收益。
 
-## 0.4 网络加载迭代（2026-11-16，当前唯一活动阶段）
+## 0.4.0 网络加载迭代（2026-11-16，历史记录）
 
 用户授权沿用自主实现、隔离真酒馆验证、成熟后可逆正式部署。目标为手机网络高峰开屏慢及首次轻/重聊天概率挂起；不改原业务插件、预设、卡片、聊天或默认模型。固定宿主1.19.0/7e8663cd9。
 

@@ -121,11 +121,11 @@ test('native persistence failures do not report success', async t => {
     assert.deepEqual((await f.call('state', chat)).body.value, []);
 });
 
-test('native integrity rejection maps to a visible conflict without retry', async t => {
+test('native integrity rejection preserves the distinct confirmation response', async t => {
     let calls = 0;
     const f = await fixture(t, { async saveChat() { calls++; const error = new Error('integrity'); error.code = 'integrity'; throw error; } });
     const result = await f.call('save', await saveBody(chat, [], [{ mes: 'data' }], 'full'));
-    assert.equal(result.code, 409); assert.equal(result.body.error, 'integrity'); assert.equal(calls, 1);
+    assert.equal(result.code, 400); assert.equal(result.body.error, 'integrity'); assert.equal(calls, 1);
 });
 
 test('a native adapter that silently fails cannot produce an acknowledgement', async t => {
