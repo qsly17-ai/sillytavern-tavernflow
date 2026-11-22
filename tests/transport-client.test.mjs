@@ -65,7 +65,7 @@ function setup({ gate, unhealthy = false, onSave, bootstrap = false, backgroundC
     }
     const host = { location: { href: 'https://st.test/', origin: 'https://st.test' }, fetch: native, Worker: FakeWorker, crypto: globalThis.crypto, DecompressionStream: globalThis.DecompressionStream };
     if (bootstrap) {
-        Object.assign(host, { top: host, AbortController, ReadableStream, Headers, URL, Blob, Response, setTimeout, clearTimeout, structuredClone });
+        Object.assign(host, { top: host, AbortController, ReadableStream, Headers, URL, Blob, Response, setTimeout, clearTimeout, structuredClone, JSON });
         vm.runInNewContext(bootSource, host);
     }
     return { host, calls, workers, native, getValue: () => value, setValue: (next) => { value = next; } };
@@ -81,7 +81,7 @@ async function adoptSettings(host) {
     const boot = host.__tavernFlowBoot;
     const response = await boot.nativeRead('/api/settings/get', save({}));
     const { settings } = await response.json();
-    const pageSettings = JSON.parse(settings);
+    const pageSettings = boot.parseNativeSettings(response, settings);
     boot.adoptRead(response, settings);
     return pageSettings;
 }
@@ -478,5 +478,42 @@ test('adopted hashes survive a Worker reinstall before the first save', async ()
         assert.equal(h.calls.some((call) => call.route === 'state'), false);
         assert.deepEqual(h.getValue(), remote);
         await replacement.dispose();
+    });
+});
+
+test('verified host compression is delegated only when the active Worker still owns fetch', async () => {
+    const h = setup({ bootstrap: true });
+    await withHost(h, async () => {
+        const boot = h.host.__tavernFlowBoot;
+        let calls = 0;
+        const native = async request => { calls++; return { ...request }; };
+        const path = '/api/settings/save', request = save({ username: 'test', nested: { extra: '汉字' } });
+        const prepare = () => boot.nativeSavePreparer(path, native);
+        assert.equal(prepare(), native);
+        const controller = installTransport({ getHeaders: () => headers });
+        await waitFor(() => controller.status().enabled);
+        const prepared = await prepare()(request);
+        assert.equal(prepared, request);
+        assert.equal((await h.host.fetch(path, prepared)).status, 200);
+        assert.deepEqual(h.getValue(), JSON.parse(request.body));
+        const groupPath = '/api/chats/group/save', extended = save({ id: 'unknown', chat: [], futureOption: true });
+        const fallback = async init => ({ ...init, headers: { ...init.headers, 'x-native-prepared': 'yes' } });
+        const delegated = await boot.nativeSavePreparer(groupPath, fallback)(extended);
+        assert.equal((await h.host.fetch(groupPath, delegated)).status, 200);
+        assert.equal(h.calls.at(-1).native, true);
+        assert.equal(h.calls.at(-1).init.headers['x-native-prepared'], 'yes');
+        assert.equal(boot.nativeSavePreparer('/api/other', native), native);
+        boot.setEnabled(false);
+        assert.equal(prepare(), native);
+        boot.setEnabled(true);
+        await prepare()({ ...request, keepalive: true });
+        const ownedFetch = h.host.fetch, captured = prepare();
+        h.host.fetch = (...args) => ownedFetch(...args);
+        assert.equal(prepare(), native);
+        await captured(request);
+        assert.equal(calls, 2);
+        assert.equal(controller.status().nativePrecompressSkipped, 2);
+        await controller.dispose();
+        assert.equal(prepare(), native);
     });
 });

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
- * ST 1.19.0 + Tavern Helper 4.12.1 only. Avoid laying out huge inert source
+ * ST 1.19.0 + Tavern Helper 4.12.1/4.12.2. Avoid laying out huge inert source
  * blocks before Helper replaces them with its own live message iframes.
  * No source/iframe removal, rendering, chat writes, or sanitizer bypass.
  */
@@ -68,7 +68,11 @@ export function installSourceGuard({
 } = {}) {
     const view = document?.defaultView;
     const chat = document?.getElementById('chat');
-    const formatter = (() => { try { return getContext()?.messageFormatter; } catch { return null; } })();
+    let extensionSettings;
+    const formatter = (() => {
+        try { const context = getContext(); extensionSettings = context?.extensionSettings; return context?.messageFormatter; }
+        catch { return null; }
+    })();
     const infrastructure = (() => { try { return !!(chat && document.head && typeof document.createElement === 'function'
         && view?.MutationObserver && typeof view.setTimeout === 'function'
         && typeof view.clearTimeout === 'function' && view.crypto?.randomUUID
@@ -83,14 +87,16 @@ export function installSourceGuard({
         if (!infrastructure) return 'host-capability-unavailable';
         try {
             const versions = getVersions();
-            if (versions?.client !== '1.19.0') return 'host-version-mismatch';
-            if (versions?.helper !== '4.12.1') return 'helper-version-mismatch';
+            if (!versions?.client || !versions?.helper) return 'version-unavailable';
+            if (versions.client !== '1.19.0') return 'host-version-mismatch';
+            if (!['4.12.1', '4.12.2'].includes(versions.helper)) return 'helper-version-mismatch';
             return 'active';
         } catch { return 'version-unavailable'; }
     }
     const status = () => {
         const hostReason = capability();
-        const reason = disposed ? 'disposed' : failure ?? (fused ? 'chat-timeout-budget-exhausted' : hostReason);
+        const reason = disposed ? 'disposed' : failure ?? (hostReason !== 'active' ? hostReason
+            : fused ? 'chat-timeout-budget-exhausted' : renderReason(extensionSettings));
         return { enabled: reason === 'active', supported: !failure && hostReason === 'active', reason, ...counts,
             pending: [...batches.values()].reduce((sum, batch) => sum + batch.remaining, 0) };
     };
@@ -117,6 +123,7 @@ export function installSourceGuard({
     }
     function failOpen(reason) {
         failure = reason;
+        observer?.disconnect();
         removeStyle();
         for (const batch of batches.values()) {
             batch.active = false;
@@ -147,6 +154,7 @@ export function installSourceGuard({
         view.clearTimeout(batch.timer);
         batches.delete(batch.key);
         tokens.delete(batch.token);
+        if (!batches.size) { observer?.disconnect(); observer = undefined; }
         let tripFuse = false;
         if (timeout) {
             counts.timedOut += Math.max(1, batch.remaining);
@@ -184,13 +192,20 @@ export function installSourceGuard({
         if (node.matches?.(SELECTOR)) consider(node);
         for (const pre of node.querySelectorAll?.(SELECTOR) ?? []) consider(pre);
     }
+    function renderReason(settings) {
+        const render = settings?.tavern_helper?.render;
+        if (render?.enabled !== true || settings?.disabledExtensions?.some(name => String(name).split('/').at(-1) === 'JS-Slash-Runner')) {
+            return 'helper-render-disabled';
+        }
+        if (render.allow_streaming !== false) return 'helper-streaming-mode';
+        if (!Number.isInteger(render.depth) || render.depth < 0 || typeof render.depth_ignore_hidden !== 'boolean') {
+            return 'helper-render-settings-unavailable';
+        }
+        return 'active';
+    }
     function contextEnabled(context) {
-        if (disposed || failure || capability() !== 'active') return false;
-        const render = context?.extensionSettings?.tavern_helper?.render;
-        const disabled = context?.extensionSettings?.disabledExtensions;
-        if (render?.enabled !== true || render.allow_streaming !== false
-            || disabled?.some(name => String(name).split('/').at(-1) === 'JS-Slash-Runner')) return false;
-        if (!Number.isInteger(render.depth) || render.depth < 0 || typeof render.depth_ignore_hidden !== 'boolean') return false;
+        extensionSettings = context?.extensionSettings;
+        if (disposed || failure || renderReason(extensionSettings) !== 'active') return false;
         if (!Array.isArray(context.chat) || !context.chatId) return false;
         const stream = context.streamingProcessor;
         if (stream && !stream.isFinished && !stream.isStopped) return false;
@@ -206,7 +221,7 @@ export function installSourceGuard({
             for (const batch of [...batches.values()]) finish(batch);
             identity = next; expired.clear(); fused = false;
         }
-        const enabled = contextEnabled(context);
+        const enabled = capability() === 'active' && contextEnabled(context);
         if (!enabled) for (const batch of [...batches.values()]) finish(batch);
         return enabled && !fused;
     }
@@ -237,9 +252,37 @@ export function installSourceGuard({
             || content?.querySelector('textarea,input,select,[contenteditable]:not([contenteditable="false"])')) return false;
         return true;
     }
+    function observeHandoff() {
+        if (observer) return;
+        observer = new view.MutationObserver(entries => {
+            try {
+                const previousReleased = counts.released;
+                if (!batches.size) return;
+                if (!synchronize(getContext())) { report(); return; }
+                for (const entry of entries) {
+                    if (entry.type === 'attributes') inspect(entry.target);
+                    else {
+                        for (const node of entry.addedNodes) inspect(node);
+                        for (const node of entry.removedNodes) inspect(node);
+                        // The iframe may be added after its source was seen.
+                        if (entry.target?.classList?.contains('TH-render')) inspect(entry.target);
+                    }
+                }
+                if (counts.released !== previousReleased) report();
+            } catch {
+                failOpen('runtime-failed');
+                report();
+            }
+        });
+        observer.observe(chat, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+    }
     function transform(html, metadata) {
+        // Most floors never contain a large frontend. Outstanding rules still
+        // need to see a chat switch even if its first new floor is plain text.
+        const large = typeof html === 'string' && html.length >= MIN_BODY;
+        if (disposed || failure || (!batches.size && (!large || capability() !== 'active'))) return html;
         const context = getContext();
-        if (!synchronize(context) || typeof html !== 'string' || html.length < MIN_BODY || !eligible(context, metadata)) return html;
+        if (!synchronize(context) || !large || !eligible(context, metadata)) return html;
         const key = metadata.messageId;
         if (expired.has(key)) return html;
         let batch = batches.get(key);
@@ -249,6 +292,7 @@ export function installSourceGuard({
         if (!batch && batches.size >= MAX_ACTIVE) return html;
         const token = batch?.token ?? `${prefix}${++serial}`;
         if (!batch) {
+            observeHandoff();
             batch = { key, token, active: true, remaining: 0, nodes: new Set(), deadline: Date.now() + TIMEOUT, timer: null };
             const index = sheet.cssRules.length;
             sheet.insertRule(`pre[${ATTRIBUTE}="${token}"]{${STYLE}}`, index);
@@ -302,25 +346,6 @@ export function installSourceGuard({
                 registrations.set(formatter, registration);
             }
             registration.owner?.dispose();
-            observer = new view.MutationObserver(entries => {
-                try {
-                    if (!synchronize(getContext())) { report(); return; }
-                    for (const entry of entries) {
-                        if (entry.type === 'attributes') inspect(entry.target);
-                        else {
-                            for (const node of entry.addedNodes) inspect(node);
-                            for (const node of entry.removedNodes) inspect(node);
-                            // The iframe may be added after its source was seen.
-                            if (entry.target?.classList?.contains('TH-render')) inspect(entry.target);
-                        }
-                    }
-                    report();
-                } catch {
-                    failOpen('runtime-failed');
-                    report();
-                }
-            });
-            observer.observe(chat, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
             registration.owner = { transform, dispose, failOpen };
         } catch { failOpen('stylesheet-failed'); dispose(); }
     }

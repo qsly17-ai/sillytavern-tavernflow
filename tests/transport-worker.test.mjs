@@ -20,10 +20,10 @@ async function decodeRequest(init) {
 }
 const key = (kind, identity) => `${kind}:${canonical(kind === 'chat' ? [identity.avatar_url.replace('.png', ''), chatFileName(identity.file_name)] :
     kind === 'group' ? [chatFileName(String(identity.id))] : identity)}`;
-function harness(values = new Map(), intercept, networkTimeoutMs) {
+function harness(values = new Map(), intercept, networkTimeoutMs, maxSnapshotBytes) {
     const events = [];
     const calls = [];
-    const runtime = createTransportRuntime({ networkTimeoutMs, postMessage: (message) => events.push(message), fetch: async (url, init = {}) => {
+    const runtime = createTransportRuntime({ networkTimeoutMs, maxSnapshotBytes, postMessage: (message) => events.push(message), fetch: async (url, init = {}) => {
         const route = new URL(url).pathname.split('/').at(-1);
         if (route === 'health') return json({ ok: true, protocol: 1, capabilities: { deltaSave: true, kinds: ['settings', 'chat', 'group'], requestGzip: true, checkedIntegrityOverwrite: true } });
         const payload = await decodeRequest(init);
@@ -353,4 +353,18 @@ test('lazy selection matches the original exact 85 percent rule for mixed JSON c
         assert.equal(result.stats.mode, expected, `mode ${n}`);
         assert.equal(canonical(h.values.get(key('settings', {}))), canonical(next), `value ${n}`);
     }
+});
+
+test('JSON byte budget evicts large baselines without losing external-write conflict detection', async () => {
+    const identity = { id: 'heavy' };
+    const value = [{ mes: '正文'.repeat(80), stat: 1 }];
+    const h = harness(new Map([[key('group', identity), value]]), undefined, undefined, 128);
+    await h.init();
+    await h.seed('group', value, identity);
+    const changed = [{ ...value[0], stat: 2 }];
+    const first = await h.save(1, 'group', changed, identity);
+    assert.equal(first.stats.mode, 'full');
+    assert.equal(first.stats.stateFetched, false);
+    h.values.set(key('group', identity), [{ mes: 'external change' }]);
+    assert.equal((await h.save(2, 'group', changed, identity)).status, 409);
 });

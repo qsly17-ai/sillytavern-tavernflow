@@ -34,3 +34,5 @@ TAVERNFLOW_HOST_ROOT=/实际/SillyTavern目录 node --test tests/backend-native.
 完整HTTP测试含原生Express response.send、JSON序列化和ETag，见`reports/startup-http-benchmark.md`。合成29.6MB响应逐次SHA一致，单请求中位+2.4%，四并发中位-18.0%；目标是降低同步阻塞，不代表所有首屏更快。
 
 从 0.4.1 起，`POST /quick-reply-presets` 在同一适配激活时复用完整设置读取的 Quick Reply 文件顺序和解析逻辑。请求受宿主登录与 CSRF 保护；没有为该接口缓存文件内容。
+
+0.5.0：助手 4.12.2 辅助生成适配只处理已登录用户访问其自己已安装的指定构建。目标宿主文件、路由和构建哈希须匹配；否则继续原处理。服务端不留存助手文件副本，不写用户扩展目录。/health 的 helperGeneration 报告路由是否接入，浏览器模块状态另行确认本页是否真的加载过匹配的构建。

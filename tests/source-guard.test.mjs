@@ -168,7 +168,7 @@ test('timeout fails open and repeated formatting cannot extend the batch deadlin
         assert.ok(h.instance.status().timedOut > 0);
         assert.equal(h.render(), BLOCK, 'expired floor is not hidden again by later redraws');
         const [lateClone] = h.insert(first);
-        assert.equal(lateClone.getAttribute(MARKER), null, 'late clone of an expired token opens immediately');
+        assert.ok(lateClone.getAttribute(MARKER), 'an expired token has no stylesheet rule or observer');
         assert.equal(h.shielded(lateClone), false);
     } finally { h.instance.dispose(); }
 });
@@ -251,7 +251,7 @@ test('dispose removes its stylesheet, covers late append, and keeps the formatte
 test('exact helper, host, render, streaming, editor and overlap boundaries fail open', () => {
     const changes = [
         h => h.versions({ client: '1.19.1', helper: '4.12.1' }),
-        h => h.versions({ client: '1.19.0', helper: '4.12.2' }),
+        h => h.versions({ client: '1.19.0', helper: '4.12.3' }),
         h => { h.renderSettings.enabled = false; },
         h => { h.renderSettings.allow_streaming = true; },
         h => { h.context().extensionSettings.disabledExtensions.push('third-party/JS-Slash-Runner'); },
@@ -308,7 +308,7 @@ test('switching chats removes old rules and timers before the next native format
         assert.equal(h.timers.size, 0);
         assert.equal(h.shielded(pre), false);
         const [clone] = h.insert(old);
-        assert.equal(clone.getAttribute(MARKER), null);
+        assert.equal(h.shielded(clone), false);
         assert.notEqual(h.render(), BLOCK, 'the new conversation has its own fresh deadline');
     } finally { h.instance.dispose(); }
 });
@@ -434,4 +434,27 @@ test('missing CSS containment support leaves the native hook inert and creates n
         assert.equal(h.render(), BLOCK);
         assert.equal(h.styles.filter(node => node.connected).length, 0);
     } finally { unsupported.dispose(); }
+});
+
+test('a late 4.12.2 manifest enables the same iframe handoff; only pending rules observe chat', () => {
+    const h = fixture();
+    try {
+        for (const helper of [undefined, '9.0.0']) {
+            h.versions({ client: '1.19.0', helper });
+            assert.equal(h.render(), BLOCK);
+            assert.equal(h.observers.length, 0);
+        }
+        h.versions({ client: '1.19.0', helper: '4.12.2' });
+        h.render('plain text');
+        assert.equal(h.observers.length, 0);
+        const [pre] = h.insert(h.render(), { hidden: true, mounted: true });
+        assert.equal(h.observers.filter(o => o.connected).length, 1);
+        assert.equal(pre.getAttribute(MARKER), null);
+        h.timeout();
+        assert.equal(h.observers.filter(o => o.connected).length, 0);
+        h.renderSettings.enabled = false;
+        assert.equal(h.instance.status().reason, 'helper-render-disabled');
+        assert.equal(h.render(), BLOCK);
+        assert.equal(h.observers.filter(o => o.connected).length, 0);
+    } finally { h.instance.dispose(); }
 });

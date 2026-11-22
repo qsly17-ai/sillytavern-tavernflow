@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 const hostRoot = process.env.TAVERNFLOW_HOST_ROOT;
 const installer = new URL('../scripts/install.py', import.meta.url).pathname;
-const hostFiles = ['public/script.js', 'public/scripts/group-chats.js', 'public/scripts/extensions/quick-reply/index.js', 'public/index.html'];
+const hostFiles = ['public/script.js', 'public/scripts/group-chats.js', 'public/scripts/extensions/quick-reply/index.js', 'public/scripts/request-compression.js', 'public/index.html'];
 const verifiedFiles = [...hostFiles.slice(0, -1), 'public/scripts/events.js', 'src/endpoints/settings.js', 'src/endpoints/chats.js'];
 const ownDirectories = ['public/scripts/extensions/third-party/tavern-flow', 'plugins/tavern-flow'];
 const hash = data => createHash('sha256').update(data).digest('hex');
@@ -104,7 +104,7 @@ test('native hooks preserve later unrelated core edits and reject hook tampering
         const installed = runInstaller(root, '--apply'); assert.equal(installed.status, 0, installed.stderr);
         for (const relative of hostFiles.slice(0, -1)) {
             const file = path.join(root, relative);
-            assert.match(await fs.readFile(file, 'utf8'), /TAVERNFLOW NATIVE READ/);
+            assert.match(await fs.readFile(file, 'utf8'), /TAVERNFLOW (?:NATIVE READ|SAVE)/);
             await fs.appendFile(file, '\n// User edit after installation\r\n');
         }
         const script = path.join(root, hostFiles[0]);

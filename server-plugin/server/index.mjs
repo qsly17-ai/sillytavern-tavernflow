@@ -3,7 +3,8 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 import { createHash } from 'node:crypto';
-import { canonical, hashValue, applyOps, chatFileName } from '../shared/protocol.mjs';
+import { canonical, hashValue, hashSnapshot, applyOps, chatFileName } from '../shared/protocol.mjs';
+import { installHelperGenerationRoute } from './helper-generation.mjs';
 import { installFreshSettingsRoute } from './startup-settings.mjs';
 
 export const info = {
@@ -11,7 +12,7 @@ export const info = {
     name: '清酌 TavernFlow',
     description: 'Independent background delta saves and native-equivalent token batching for SillyTavern 1.19.',
 };
-const VERSION = '0.4.1';
+const VERSION = '0.5.0';
 const HASH = /^[a-f0-9]{64}$/;
 const KINDS = new Set(['settings', 'chat', 'group']);
 const REMOTE_TOKENIZERS = new Set(['qwen2', 'command-r', 'command-a', 'nemo', 'deepseek']);
@@ -94,7 +95,7 @@ async function fileStat(filePath) {
 }
 
 /** Injectable persistence keeps unit tests independent of any installed host. */
-export function createHandlers({ persistence, validateUser, maxFileBytes = 128 * 1024 * 1024, maxCacheBytes = 64 * 1024 * 1024, maxResources = 32, getStartupStatus, readQuickReplyPresets } = {}) {
+export function createHandlers({ persistence, validateUser, maxFileBytes = 128 * 1024 * 1024, maxCacheBytes = 64 * 1024 * 1024, maxResources = 32, getStartupStatus, getGenerationStatus, readQuickReplyPresets } = {}) {
     if (!persistence || typeof persistence.saveChat !== 'function' || typeof persistence.saveSettings !== 'function') {
         throw new TypeError('Native persistence adapters are required');
     }
@@ -157,7 +158,8 @@ export function createHandlers({ persistence, validateUser, maxFileBytes = 128 *
             if ((resource.kind === 'settings' && !isObject(value)) || (resource.kind !== 'settings' && !Array.isArray(value))) {
                 throw new FlowError(422, 'invalid_existing_shape');
             }
-            const entry = { value, hash: await hashValue(value), signature: fingerprint(after), rawHash, bytes: rawBytes.byteLength };
+            const verified = await hashSnapshot(value);
+            const entry = { value, hash: verified.hash, canonicalBytes: verified.bytes, signature: fingerprint(after), rawHash, bytes: rawBytes.byteLength };
             remember(resource.key, entry);
             return entry;
         }
@@ -190,9 +192,18 @@ export function createHandlers({ persistence, validateUser, maxFileBytes = 128 *
                     counters.conflicts++;
                     return { status: 409, value: { ok: false, error: 'conflict', hash: current.hash } };
                 }
+                // read() verified the file bytes (even on a cache hit), its
+                // parsed shape, and its canonical digest. A noop has no new
+                // value; both supplied hashes still have to match what is on disk.
+                if (body.mode === 'noop') {
+                    if (current.canonicalBytes > maxFileBytes) throw new FlowError(413, 'resource_too_large');
+                    if (current.hash !== body.nextHash) bad('next_hash_mismatch');
+                    counters.noops++;
+                    return { status: 200, value: { ok: true, hash: current.hash, mode: 'noop' } };
+                }
                 let next;
                 try {
-                    next = body.mode === 'noop' ? current.value : body.mode === 'patch' ? applyOps(current.value, body.ops) : body.value;
+                    next = body.mode === 'patch' ? applyOps(current.value, body.ops) : body.value;
                     if (resource.kind === 'settings' ? !isObject(next) : !Array.isArray(next)) bad('invalid_value_shape');
                     const serialized = canonical(next);
                     if (Buffer.byteLength(serialized) > maxFileBytes) throw new FlowError(413, 'resource_too_large');
@@ -272,7 +283,7 @@ export function createHandlers({ persistence, validateUser, maxFileBytes = 128 *
     function health(_request, response) {
         response.set?.('Cache-Control', 'no-store');
         return response.json({
-            ok: true, version: VERSION, protocol: 1, startup: getStartupStatus?.(), hostVersion: persistence.hostVersion || 'injected',
+            ok: true, version: VERSION, protocol: 1, startup: getStartupStatus?.(), helperGeneration: getGenerationStatus?.(), hostVersion: persistence.hostVersion || 'injected',
             capabilities: { deltaSave: true, kinds: [...KINDS], nativePersistence: true, requestGzip: persistence.requestGzip === true, checkedIntegrityOverwrite: true,
                 tokenBatch: typeof persistence.countTokens === 'function', nativeEquivalentTokens: true,
                 tokenEndpoint: '/openai/count', excludedTokenizers: [...REMOTE_TOKENIZERS] },
@@ -342,17 +353,18 @@ export async function loadNativePersistence(hostRoot = process.cwd()) {
     };
 }
 
-let activeHandlers, startup;
+let activeHandlers, startup, helperGeneration;
 export async function init(router) {
     const persistence = await loadNativePersistence();
     startup = await installFreshSettingsRoute({ enabled: true });
+    helperGeneration = await installHelperGenerationRoute();
     activeHandlers = createHandlers({ persistence, validateUser: persistence.validateUser, getStartupStatus: () => startup.status(),
-        readQuickReplyPresets: startup.readQuickReplyPresets });
+        getGenerationStatus: () => helperGeneration.status(), readQuickReplyPresets: startup.readQuickReplyPresets });
     router.get('/health', activeHandlers.health);
     router.post('/state', activeHandlers.state);
     router.post('/save', activeHandlers.save);
     router.post('/tokens', activeHandlers.tokens);
     router.post('/quick-reply-presets', activeHandlers.quickReplyPresets);
-    console.info('[TavernFlow] native persistence adapter ready (SillyTavern 1.19.0)');
+    console.info(`[TavernFlow] ${VERSION} ready (SillyTavern 1.19.0); startup=${startup.status().active}, helper=${helperGeneration.status().reason}`);
 }
-export async function exit() { startup?.dispose(); activeHandlers?.dispose(); }
+export async function exit() { helperGeneration?.dispose(); startup?.dispose(); activeHandlers?.dispose(); }

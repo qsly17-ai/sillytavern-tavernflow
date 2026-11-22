@@ -30,7 +30,7 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
     const host = globalThis.window ?? globalThis;
     const original = host.fetch;
     const here = host.location;
-    const state = { enabled: false, reason: 'starting', pending: 0, completed: 0, failures: 0, canceled: 0, bypassed: 0, requiresReload: false, originalBytes: 0, sourceBytes: 0, sentBytes: 0, recent: [] };
+    const state = { enabled: false, reason: 'starting', pending: 0, completed: 0, failures: 0, canceled: 0, bypassed: 0, nativePrecompressSkipped: 0, requiresReload: false, originalBytes: 0, sourceBytes: 0, sentBytes: 0, recent: [] };
     const snapshot = () => ({ ...state, recent: state.recent.slice() });
     const emit = (event) => { try { onStats?.({ module: 'transport', ...event }); } catch { /* telemetry cannot break a save */ } };
     const inactive = (reason) => { state.reason = reason; emit({ event: 'status', ...snapshot() }); return { status: snapshot, dispose() {} }; };
@@ -54,8 +54,9 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
     let failed = false;
     let terminated = false;
     let serial = 0;
-    let disconnectAdoptions;
+    let disconnectAdoptions, disconnectSavePreparer;
     const dispatches = new Map();
+    const deferredCompression = new WeakMap();
     const boot = host.__tavernFlowBoot;
     const pending = new Map();
     const idleWaiters = [];
@@ -65,6 +66,7 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
         if (terminated) return;
         terminated = true;
         disconnectAdoptions?.();
+        disconnectSavePreparer?.();
         worker.terminate();
     }
     function dispatch(path, operation) {
@@ -129,6 +131,20 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
                     catch { fail('worker-message-failed'); }
                 });
             });
+            disconnectSavePreparer = boot?.connectSavePreparer?.((path, nativeCompress) => {
+                // If a later wrapper owns fetch, it must see the same request
+                // representation as in the host. Do not bypass its preprocessing.
+                if (!SAVE_PATHS.has(path) || host.fetch !== wrappedFetch) return nativeCompress;
+                return request => {
+                    if (stopped || failed || !state.enabled || host.fetch !== wrappedFetch || typeof request?.body !== 'string') return nativeCompress(request);
+                    const headers = new Headers(request.headers);
+                    if (request.method !== 'POST' || request.keepalive || request.credentials === 'omit' || headers.has('content-encoding') ||
+                        !headers.get('content-type')?.toLowerCase().includes('application/json')) return nativeCompress(request);
+                    deferredCompression.set(request, nativeCompress);
+                    state.nativePrecompressSkipped++;
+                    return request;
+                };
+            });
             state.enabled = true;
             state.reason = 'active';
             emit({ event: 'status', ...snapshot() });
@@ -149,7 +165,7 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
             // The worker has not dispatched a save. Preserve the original request and its fetch chain.
             if (!entry.aborted) {
                 if (RELOAD_REQUIRED.has(host)) entry.reject(reloadError());
-                else entry.resolve(original.apply(entry.receiver, entry.args));
+                else entry.resolve(passThrough(entry.receiver, entry.args));
             }
         } else if (data.error) {
             state.failures++;
@@ -205,6 +221,18 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
     function isNativeSave(input, init) {
         return targetsSave(input, init, here);
     }
+    function passThrough(receiver, args) {
+        const request = args[1];
+        const compress = deferredCompression.get(request);
+        if (!compress) return original.apply(receiver, args);
+        deferredCompression.delete(request);
+        // The worker has not written anything. Restore the host's exact
+        // preprocessing before a native fallback, including later wrappers.
+        return Promise.resolve().then(() => compress(request)).then(prepared => {
+            if (RELOAD_REQUIRED.has(host)) throw reloadError();
+            return original.call(receiver, args[0], prepared);
+        });
+    }
     function wrappedFetch(input, init) {
         if (state.requiresReload && isNativeSave(input, init)) return Promise.reject(reloadError());
         if (stopped && pending.size && isNativeSave(input, init)) {
@@ -212,12 +240,12 @@ export function installTransport({ context, getHeaders = context?.getRequestHead
             const args = [...arguments];
             return waitForIdle().then(() => {
                 if (state.requiresReload) throw reloadError();
-                return original.apply(receiver, args);
+                return passThrough(receiver, args);
             });
         }
-        if (!state.enabled || stopped || failed) return original.apply(this, arguments);
+        if (!state.enabled || stopped || failed) return passThrough(this, arguments);
         const target = qualify(input, init);
-        if (!target) return original.apply(this, arguments);
+        if (!target) return passThrough(this, arguments);
         const { request, path } = target;
         if (request.signal.aborted) return Promise.reject(request.signal.reason ?? new DOMException('Aborted', 'AbortError'));
         const id = ++serial;

@@ -4,7 +4,7 @@ import vm from 'node:vm';
 import fs from 'node:fs/promises';
 const source = await fs.readFile(new URL('../client/boot.js', import.meta.url), 'utf8');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-function fixture(fetch) {
+function fixture(fetch, extras = {}) {
     const nodes = [];
     const document = { body: { append(node) { nodes.push(node); } }, createElement(tag) {
         const listeners = {};
@@ -14,9 +14,9 @@ function fixture(fetch) {
             showModal() { this.open = true; }, close() { this.open = false; } };
     } };
     const host = { fetch, document, location: { href: 'https://example.test/', origin: 'https://example.test' },
-        Headers, URL, Blob, Response, AbortController, ReadableStream, structuredClone,
+        Headers, URL, Blob, Response, AbortController, ReadableStream, structuredClone, JSON,
         setTimeout(fn, delay) { return setTimeout(fn, delay === 30000 || delay === 60000 ? 40 : delay === 750 ? 0 : delay); }, clearTimeout };
-    host.top = host; vm.runInNewContext(source, host);
+    Object.assign(host, extras); host.top = host; vm.runInNewContext(source, host);
     const call = (path = '/api/chats/get', overrides = {}) => {
         const init = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"file_name":"same-chat"}', ...overrides };
         return path === '/api/settings/get' || path.startsWith('/api/chats/') ? host.__tavernFlowBoot.nativeRead(path, init) : host.fetch(path, init);
@@ -194,4 +194,53 @@ test('recovery exposes the unsent draft and allows selection when clipboard perm
     let selected = false; draft.select = () => { selected = true; };
     await button.listeners.click(); assert(selected); assert.match(button.textContent, /选择/);
     nodes[0].children[3].listeners.click(); assert.equal(reloaded, false); assert.equal(draft.value, '未发送的完整草稿😀');
+});
+
+test('group object is retried before navigation can initialize an empty chat; a real empty group is valid', async () => {
+    const bodies = ['{}', '[{"mes":"existing"}]', '[]'];
+    const { host, call } = fixture(async () => new Response(bodies.shift()));
+    const data = await (await call('/api/chats/group/get')).json();
+    assert.deepEqual(data, [{ mes: 'existing' }]);
+    assert.deepEqual(await (await call('/api/chats/group/get')).json(), []);
+    assert.equal(host.__tavernFlowBoot.status().retries, 1);
+});
+
+test('validated views are consumed once; clones and fallback parses cannot share mutable objects', async () => {
+    const settings = '{"unknown":{"value":1}}', text = JSON.stringify({ settings });
+    const parsed = [];
+    const { host, call } = fixture(async () => new Response(text), {
+        JSON: { ...JSON, stringify: JSON.stringify, parse(input) { parsed.push(input); return JSON.parse(input); } },
+    });
+    const response = await call('/api/settings/get');
+    const clone = response.clone();
+    const data = await response.json();
+    const first = host.__tavernFlowBoot.parseNativeSettings(response, data.settings);
+    assert.equal(parsed.filter(input => input === text).length, 1);
+    assert.equal(parsed.filter(input => input === settings).length, 1);
+    first.unknown.value = 2;
+    assert.equal(host.__tavernFlowBoot.parseNativeSettings(response, data.settings).unknown.value, 1);
+    data.settings = 'changed';
+    assert.deepEqual(await clone.json(), { settings });
+    assert(response.bodyUsed && response.body.locked);
+    await assert.rejects(response.json(), TypeError);
+    const second = await call('/api/settings/get');
+    const locked = second.body.getReader();
+    await assert.rejects(second.json(), TypeError);
+    assert(!second.bodyUsed);
+    locked.releaseLock();
+    assert.equal(await second.text(), text);
+    await assert.rejects(second.json(), TypeError);
+});
+
+test('plain request shortcut never changes the gzip decision at a Unicode byte boundary', () => {
+    const boot = fixture(async () => new Response('[]')).host.__tavernFlowBoot;
+    const outside = (s,min,max) => boot.outsideCompressionWindow(s.length,{minPayloadSize:min,maxPayloadSize:max});
+    for (const s of ['ascii','中文字','😀','\ud800','x'.repeat(16)]) {
+        const bytes = new TextEncoder().encode(s).byteLength;
+        for (const min of [0,1,5,9,40]) for(const max of [0,3,8,16,80]) {
+            if (outside(s,min,max)) assert(bytes < min || max > 0 && bytes > max);
+        }
+    }
+    assert(outside('ab',12,200));assert(outside('abcde',1,4));assert(!outside('中文',0,5));
+    boot.setEnabled(false); assert(!outside('abcde',1,4));
 });

@@ -3,7 +3,7 @@
 import { installLinearEscapeScan } from './lib/linear-scan.js';
 import { installMetaAnchor } from './lib/meta-anchor.js';
 import { installEmptyClearGuard } from './lib/empty-clear.js';
-export async function installFastPaths({ context, onStats = () => {} } = {}) {
+export async function installFastPaths({ context, getBoxVersion, onStats = () => {} } = {}) {
     const patches = [];
     const state = { enabled: false, reason: 'host-capability-unavailable', parser: false, metaRegex: false };
     let guard, disposed = false;
@@ -16,7 +16,7 @@ export async function installFastPaths({ context, onStats = () => {} } = {}) {
         const regex = installMetaAnchor(RegexProvider);
         patches.push(parser, regex);
         state.parser = parser.applied; state.metaRegex = regex.applied;
-        guard = installEmptyClearGuard(globalThis.window, () => globalThis.SillyTavern.getContext());
+        guard = installEmptyClearGuard(globalThis.window, () => globalThis.SillyTavern.getContext(), getBoxVersion, onStats);
         state.enabled = parser.applied || regex.applied;
         state.reason = state.enabled ? 'active' : 'host-algorithm-changed-or-existing-patch';
     } catch { /* Version-fingerprinted optional fast paths fail open. */ }

@@ -3,6 +3,7 @@ import { installTransport } from './transport.js';
 import { installRender } from './render.js';
 import { installUIOptimizations } from './ui-optimizations.js';
 import { installTokens } from './tokens.js';
+import { installHelperGeneration } from './helper-generation.mjs';
 import { installFastPaths } from './fast-paths.js';
 import { mountPanel } from './panel.js';
 import { installInteractions } from './interactions.js';
@@ -15,7 +16,7 @@ import { extensionNames, getExtensionManifest, modules as availableModules } fro
 import { CLIENT_VERSION } from '../../../../script.js';
 
 const ID = 'tavern-flow';
-const defaults = { enabled: true, transport: true, render: true, sourceGuard: true, startupPreload: false, tokens: true, fastPaths: true, interactions: true, lightweightDrag: false, quickDrawers: true, disableSpellcheck: false };
+const defaults = { enabled: true, transport: true, render: true, sourceGuard: true, startupPreload: false, helperGeneration: true, tokens: true, fastPaths: true, interactions: true, lightweightDrag: false, quickDrawers: true, disableSpellcheck: false };
 let alive = false, waiting, panel, modules = {}, health = null, generation = 0;
 const early = {};
 let blockers = [], settings = {}, readyContext;
@@ -39,15 +40,21 @@ function reconcileEarly({ initial = false } = {}) {
     const enabled = alive && options.enabled && !earlyBlocked(context);
     globalThis.__tavernFlowBoot?.setEnabled(enabled);
     if (!enabled || !options.sourceGuard) { early.sourceGuard?.dispose(); delete early.sourceGuard; }
-    else if (!early.sourceGuard) early.sourceGuard = installSourceGuard({ getContext,
-        getVersions: () => ({ client: CLIENT_VERSION.split(':')[1], helper: getExtensionManifest('third-party/JS-Slash-Runner')?.version }), onStats: update });
+    else if (!early.sourceGuard) {
+        // The native loader's getter deep-clones a manifest. Its version is
+        // fixed for this page; only retry while early discovery is incomplete.
+        let helperVersion;
+        early.sourceGuard = installSourceGuard({ getContext,
+            getVersions: () => ({ client: CLIENT_VERSION.split(':')[1],
+                helper: helperVersion ??= getExtensionManifest('third-party/JS-Slash-Runner')?.version }), onStats: update });
+    }
     if (!enabled || !options.startupPreload) { early.preload?.dispose(); delete early.preload; }
     else if (initial && !early.preload) early.preload = installStartupPreload({ context, extensionNames,
         getManifest: getExtensionManifest, availableModules, clientVersion: CLIENT_VERSION.split(':')[1], onStats: update });
 }
 export function getStatus() {
     requiresReload ||= modules.transport?.status().requiresReload === true;
-    return { version: '0.4.1', enabled: alive && settings.enabled, backend: health, blockers: blockers.slice(),
+    return { version: '0.5.0', enabled: alive && settings.enabled, backend: health, blockers: blockers.slice(),
         modules: Object.fromEntries(Object.entries({ sourceGuard: inactive('disabled'),
             preload: inactive(alive && settings.enabled && settings.startupPreload ? 'next-start' : 'disabled'),
             loading: globalThis.__tavernFlowBoot || inactive('bootstrap-not-installed'), ...early, ...modules }).map(([name, module]) => [name, module.status()])),
@@ -99,9 +106,14 @@ async function startModulesNow(epoch) {
         ? installTokens({ context, onStats: update })
         : inactive(overlap ? 'overlapping-optimizer' : !settings.tokens ? 'disabled' : 'backend-unavailable');
     const fastPaths = settings.fastPaths && !loaded('st-linear-parser')
-        ? await installFastPaths({ context, onStats: update }) : inactive('disabled-or-existing-compat-patch');
+        ? await installFastPaths({ context, onStats: update, getBoxVersion: () => getExtensionManifest('third-party/LittleWhiteBox')?.version }) : inactive('disabled-or-existing-compat-patch');
     if (!alive || epoch !== generation) { fastPaths.dispose(); return; }
     modules.fastPaths = fastPaths;
+    const helper = settings.helperGeneration && health?.helperGeneration?.active && !overlap
+        ? await installHelperGeneration({ context })
+        : inactive(overlap ? 'overlapping-optimizer' : !settings.helperGeneration ? 'disabled' : 'helper-build-unverified');
+    if (!alive || epoch !== generation) { helper.dispose(); return; }
+    modules.helperGeneration = helper;
     const interactions = (settings.interactions || settings.lightweightDrag) && !overlap
         ? await installInteractions({ context, options: { promptToggle: settings.interactions, lightweightDrag: settings.lightweightDrag }, onStats: update })
         : inactive(overlap ? 'overlapping-optimizer' : 'disabled');

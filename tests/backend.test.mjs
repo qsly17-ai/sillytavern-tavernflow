@@ -197,3 +197,12 @@ test('unavailable or invalid tokenizers fail explicitly', async t => {
     const invalid = await fixture(t, { async countTokens() { return { token_count: NaN }; } });
     assert.equal((await invalid.call('tokens', request)).code, 502);
 });
+
+test('noop rejects a claimed next digest that differs from the verified file', async t => {
+    const f = await fixture(t);
+    const result = await f.call('save', await saveBody(chat, [], [{ mes: 'changed' }], 'noop'));
+    assert.equal(result.code, 400);
+    assert.equal(result.body.error, 'next_hash_mismatch');
+    assert.equal(f.calls.length, 0);
+    assert.equal(f.handlers.stats().noops, 0);
+});

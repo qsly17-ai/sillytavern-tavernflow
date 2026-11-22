@@ -25,7 +25,7 @@ function untilAbort(promise, signal) {
 }
 function fixture({ settings = {}, plans = [], starting = false, scripts = [], extensionNames = [] } = {}) {
     const timers = new Map(), listeners = new Map(), sessions = [], owners = [], panels = [], healthReads = [];
-    const health = { ok: true, capabilities: { tokenBatch: true } };
+    const health = { ok: true, helperGeneration: {active:true}, capabilities: { tokenBatch: true } };
     const bootChanges = [];
     let nextTimer = 0, ready = false, savedSettings = 0;
     const context = {
@@ -78,6 +78,7 @@ function fixture({ settings = {}, plans = [], starting = false, scripts = [], ex
         installRender: () => owner('render'),
         installUIOptimizations: () => owner('ui'),
         installTokens: () => owner('tokens'),
+        installHelperGeneration: async () => owner('helperGeneration'),
         installFastPaths: async () => owner('fastPaths'),
         installInteractions: async () => owner('interactions'),
         mountPanel(options) {

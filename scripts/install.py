@@ -14,7 +14,7 @@ LEGACY_READ_HOOKS={
   (b'const data = await loadGroupChat(chat_id);',b'const data = await loadGroupChat(chat_id, true); /* TAVERNFLOW NATIVE READ */'),
  ],
 }
-HOOKS={
+READ_HOOKS_041={
  'public/script.js':[
   *LEGACY_READ_HOOKS['public/script.js'],
   (b'const data = await response.json();\n        if (Array.isArray(data) && data.length > 0) {',
@@ -34,7 +34,45 @@ HOOKS={
    b"const response = await (globalThis.__tavernFlowBoot?.quickReplyRead || fetch)('/api/settings/get', { /* TAVERNFLOW NATIVE READ */"),
  ],
 }
+# Each supported release has a fixed uninstall receipt, even when a later
+# release adds native hooks.
+HOOKS = {path: list(pairs) for path, pairs in READ_HOOKS_041.items()}
+
+# Reuse the validated inner settings only on the host call site that consumes
+# it. Other readers (or a wrapper that replaced the string) keep JSON.parse.
+settings_old, settings_041 = HOOKS['public/script.js'][-1]
+HOOKS['public/script.js'][-1] = (settings_old, settings_041.replace(
+ b'settings = JSON.parse(data.settings);',
+ b'settings = globalThis.__tavernFlowBoot?.parseNativeSettings ? globalThis.__tavernFlowBoot.parseNativeSettings(response, data.settings) : JSON.parse(data.settings);',
+))
+# The serializer still takes a synchronous, consistent JSON snapshot. The
+# current fetch chain sees that same body; a ready worker handles compression.
+for relative, variable, endpoint, next_line in [
+ ('public/script.js', 'saveSettingsRequest', '/api/settings/save', "            method: 'POST',"),
+ ('public/script.js', 'saveChatRequest', '/api/chats/save', "            method: 'POST',"),
+ ('public/scripts/group-chats.js', 'saveGroupChatRequest', '/api/chats/group/save', "        method: 'POST',"),
+]:
+ prefix = f'const {variable} = await '
+ anchor = (prefix + 'compressRequest({\n' + next_line).encode()
+ replacement = (prefix + f"(globalThis.__tavernFlowBoot?.nativeSavePreparer?.('{endpoint}', compressRequest) ?? compressRequest)({{\n" + next_line).encode()
+ HOOKS[relative].append((anchor, replacement))
+
+# A UTF-8 string takes between one and three bytes per UTF-16 code unit.
+# If even these bounds are outside the configured gzip window, native code
+# would return the same request; no need to allocate an encoded copy.
+HOOKS['public/scripts/request-compression.js'] = [(
+ b'    const textEncoder = new TextEncoder();',
+ b'    if (globalThis.__tavernFlowBoot?.outsideCompressionWindow?.(requestBody.length, requestCompressionConfig)) return plainRequest; /* TAVERNFLOW SAVE */\n    const textEncoder = new TextEncoder();',
+)]
+
+def hooks_for_version(version):
+ sets = {'0.4.0': LEGACY_READ_HOOKS, '0.4.1': READ_HOOKS_041, '0.5.0': HOOKS}
+ if version not in sets:
+  raise SystemExit('不认识该版本的安装回执，拒绝自动回滚')
+ return sets[version]
+
 VERIFIED={
+ 'public/scripts/request-compression.js':'0222d3418ab2ac604f7170d924575bc1419c31259c028cf4164c0dc566c4c50f',
  'public/script.js':'955c603d0bad84bac5a716f0818d85c2543e44d4c43878e0d63ef1e55ca91855',
  'public/scripts/events.js':'2aa1c20f140fab8967e6f850bd6e253bd0aa6e7c6a2e0540778cb11dd0f3a6ea',
  'public/scripts/group-chats.js':'862eb24dfe1f596a2bd6d039a69397667829e0fc34471d22d2028d7781a5c73c',
@@ -106,7 +144,7 @@ def main():
   boot=targets[0]/BOOT_RECEIPT
   if boot.exists():
    boot_data=json.loads(boot.read_text());after=remove_boot(before,boot_data)
-   hooks=LEGACY_READ_HOOKS if boot_data.get('version')=='0.4.0' else HOOKS
+   hooks=hooks_for_version(boot_data.get('version'))
    if boot_data.get('nativeHooks')!=hook_receipt(hooks):raise SystemExit('原生读取标记回执不匹配')
    for relative,pairs in hooks.items():
     file=host/relative;data=file.read_bytes();result=data

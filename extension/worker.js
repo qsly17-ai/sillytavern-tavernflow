@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { canonical, hashValue, diffValues, chatFileName } from './lib/protocol.mjs';
+import { canonical, hashSnapshot, diffValues, chatFileName } from './lib/protocol.mjs';
 
 const PATHS = {
     '/api/settings/save': 'settings', '/api/settings/get': 'settings',
@@ -42,7 +42,7 @@ function patchFitsWithoutFull(value, patchLength, envelopeLength) {
 }
 
 // Exported for isolated protocol/transport tests; a browser worker starts it below.
-export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.bind(globalThis), postMessage = (message) => globalThis.postMessage(message), networkTimeoutMs = 90000 } = {}) {
+export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.bind(globalThis), postMessage = (message) => globalThis.postMessage(message), networkTimeoutMs = 90000, maxSnapshotBytes = 32 * 1024 * 1024 } = {}) {
     let config;
     const preparations = new Map();
     const queues = new Map();
@@ -53,10 +53,13 @@ export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.
         baselines.delete(key);
         if (baseline.blocked) baseline = { hash: baseline.hash, blocked: baseline.blocked };
         baselines.set(key, baseline);
-        // Keep only six complete snapshots. Hash-only entries still detect stale saves.
-        let retained = 0;
+        // Bound the count and combined canonical JSON size of complete baselines.
+        // Evicted bodies retain their verified hash (and any conflict guard).
+        let retained = 0, retainedBytes = 0;
         for (const [resource, entry] of [...baselines].reverse()) {
-            if (entry.value !== undefined && ++retained > 6) baselines.set(resource, { hash: entry.hash });
+            if (entry.value === undefined) continue;
+            if (retained >= 6 || retainedBytes + entry.bytes > maxSnapshotBytes) baselines.set(resource, { hash: entry.hash });
+            else { retained++; retainedBytes += entry.bytes; }
         }
         // The page retains only concurrency metadata, never a full snapshot.
         // A later worker must check this same base instead of fetching a newer
@@ -137,9 +140,9 @@ export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.
         if (!response.ok) return { response, body };
         const data = JSON.parse(body);
         if (data.ok !== true || !hashPattern.test(data.hash || '') || (kind === 'settings' ? !isObject(data.value) : !Array.isArray(data.value))) throw new Error('Invalid state response');
-        const hash = await hashValue(data.value);
-        if (hash !== data.hash) throw new Error('State hash mismatch');
-        const baseline = { value: data.value, hash };
+        const verified = await hashSnapshot(data.value);
+        if (verified.hash !== data.hash) throw new Error('State hash mismatch');
+        const baseline = { value: data.value, ...verified };
         remember(key, baseline);
         return { baseline };
     }
@@ -169,7 +172,8 @@ export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.
                 if (loaded.response) return relay(loaded.response, loaded.body, { ...stats, mode: 'state-failed', ms: performance.now() - started });
                 baseline = loaded.baseline;
             }
-            const nextHash = await hashValue(value);
+            const verified = await hashSnapshot(value);
+            const nextHash = verified.hash;
             throwIfAborted(signal);
             const resource = { kind, identity, ...(force ? { force: true } : {}) };
             let payload;
@@ -220,7 +224,7 @@ export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.
                     remember(key, { ...baseline, blocked: 'unconfirmed-acknowledgement' });
                     return { type: 'response', status: 502, statusText: 'Bad Gateway', headers: [['content-type', 'application/json']], body: JSON.stringify({ ok: false, error: 'unconfirmed-save', message: '服务器未返回可核验的保存确认；请重新读取后再保存。' }), stats: { ...stats, status: 502 } };
                 }
-                remember(key, { value, hash: nextHash });
+                remember(key, { value, ...verified });
                 if (force) integrityRejections.delete(key);
                 // Keep native fetch consumers' success contract; our checked
                 // hash acknowledgement belongs only to the worker protocol.
@@ -251,7 +255,7 @@ export function createTransportRuntime({ fetch: requestFetch = globalThis.fetch.
             // directory. The server still checks the actual file before saving.
             if (kind === 'chat' && isObject(value) && Object.keys(value).length === 0) value = [];
             if (kind === 'settings' ? !isObject(value) : !Array.isArray(value)) throw new Error('Invalid native baseline');
-            remember(key, { value, hash: await hashValue(value) });
+            remember(key, { value, ...await hashSnapshot(value) });
             seedStatus(message, kind, true);
         } catch {
             // An adopted snapshot that could not be retained must never be

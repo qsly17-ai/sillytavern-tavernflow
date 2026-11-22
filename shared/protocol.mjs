@@ -48,19 +48,21 @@ export function canonical(value) {
     return encode(value, 0);
 }
 
-export async function hashValue(value) {
+export async function hashSnapshot(value) {
     const bytes = new TextEncoder().encode(canonical(value));
     if (globalThis.crypto?.subtle) {
         const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
-        return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+        return { hash: Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join(''), bytes: bytes.byteLength };
     }
     // Node's WebCrypto can be absent in test runners; browsers use the branch above.
     if (typeof process !== 'undefined' && process.versions?.node) {
         const { createHash } = await import('node:crypto');
-        return createHash('sha256').update(bytes).digest('hex');
+        return { hash: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.byteLength };
     }
     throw new Error('SHA-256 requires a secure browser context');
 }
+
+export async function hashValue(value) { return (await hashSnapshot(value)).hash; }
 
 function equal(a, b) {
     if (a === b) return true;
@@ -101,7 +103,30 @@ export function diffValues(base, next) {
     return ops;
 }
 
-const clone = value => JSON.parse(canonical(value));
+// A patch owns an independent JSON tree. Copy immutable strings by value
+// instead of escaping and reparsing every unchanged floor just to copy it.
+function clone(value, depth = 0) {
+    if (depth > 256) throw new TypeError('JSON nesting is too deep');
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return value === 0 ? 0 : value;
+    if (Array.isArray(value)) {
+        const result = new Array(value.length);
+        for (let i = 0; i < value.length; i++) {
+            if (!own(value, i)) throw new TypeError('Sparse arrays are not JSON data');
+            result[i] = clone(value[i], depth + 1);
+        }
+        return result;
+    }
+    if (!object(value) || ![null, Object.prototype].includes(Object.getPrototypeOf(value))) {
+        throw new TypeError('Expected JSON data');
+    }
+    const result = {};
+    // Preserve the original canonical clone's key order and literal special keys.
+    for (const key of Object.keys(value).sort()) {
+        Object.defineProperty(result, key, { value: clone(value[key], depth + 1), enumerable: true, configurable: true, writable: true });
+    }
+    return result;
+}
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 function keyFor(container, key) {
     if (Array.isArray(container)) {

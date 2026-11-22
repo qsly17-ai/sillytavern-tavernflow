@@ -11,10 +11,24 @@
         ['/api/chats/get', '聊天'], ['/api/chats/group/get', '群聊'], ['/api/worldinfo/get', '世界书'],
         ['/api/backgrounds/all', '背景列表'], ['/api/backgrounds/folders', '背景文件夹'],
     ]);
-    const stats = { version: '0.4.1', reads: 0, recovered: 0, retries: 0, waiting: 0, active: 0 };
+    const stats = { version: '0.5.0', reads: 0, recovered: 0, retries: 0, waiting: 0, active: 0 };
     const waiting = new Set();
     const nativeResponses = new WeakMap();
     const chatBodies = new WeakMap();
+    const validatedValues = new WeakMap();
+    const validatedSettings = new WeakMap();
+    let savePreparer;
+    // Only our newly built complete response owns this parsed value. Its clones
+    // keep independent native bodies. Do not wait for cancellation: a cloned
+    // (teed) stream may wait indefinitely for the other reader.
+    async function json() {
+        if (!validatedValues.has(this) || this.bodyUsed || this.body.locked) return Response.prototype.json.call(this);
+        const value = validatedValues.get(this);
+        validatedValues.delete(this);
+        const reader = this.body.getReader();
+        void reader.cancel().catch(() => {});
+        return value;
+    }
     const adoptions = new Map();
     let adoptionId = 0, sendAdoption;
     let enabled = true, dialog, label, button, draftArea, copyDraft;
@@ -149,9 +163,13 @@
             // failure branch. Validation never logs the user's response contents.
             const value = JSON.parse(await blob.text());
             if (pathname === '/api/settings/get' && (!value || Array.isArray(value) || typeof value.settings !== 'string')) throw new Error('invalid-settings');
-            if (pathname.startsWith('/api/chats/') && !Array.isArray(value) && !(value && typeof value === 'object' && Object.keys(value).length === 0)) throw new Error('invalid-chat');
+            if (pathname.startsWith('/api/chats/') && !Array.isArray(value)) {
+                const newSingleChat = pathname === '/api/chats/get' && value !== null && typeof value === 'object' && Object.keys(value).length === 0;
+                if (!newSingleChat) throw new Error('invalid-chat');
+            }
+            let saved;
             if (pathname === '/api/settings/get' && typeof value?.settings === 'string') {
-                const saved = JSON.parse(value.settings);
+                saved = JSON.parse(value.settings);
                 if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw new Error('invalid-settings');
                 const options = saved.extension_settings;
                 if (options?.disabledExtensions?.includes('third-party/tavern-flow') || options?.['tavern-flow']?.enabled === false) enabled = false;
@@ -166,6 +184,9 @@
                 return result;
             }
             metadata(complete);
+            validatedValues.set(complete, value);
+            Object.defineProperty(complete, 'json', { configurable: true, writable: true, value: json });
+            if (saved) validatedSettings.set(complete, { text: value.settings, saved });
             if (pathname.startsWith('/api/chats/')) chatBodies.set(complete, blob);
             return complete;
         } finally {
@@ -229,6 +250,24 @@
                 : await host.fetch(input, init);
             if (path && response.ok) nativeResponses.set(response, { path, identity });
             return response;
+        },
+        parseNativeSettings(response, text) {
+            const entry = validatedSettings.get(response);
+            validatedSettings.delete(response);
+            return entry && entry.text === text ? entry.saved : JSON.parse(text);
+        },
+        outsideCompressionWindow(length, config) {
+            if (!enabled) return false;
+            const min = Number(config.minPayloadSize) || 0;
+            const max = Number(config.maxPayloadSize) || 0;
+            return (max > 0 && length > max) || length * 3 < min;
+        },
+        nativeSavePreparer(path, nativeCompress) {
+            return enabled && savePreparer ? savePreparer(path, nativeCompress) : nativeCompress;
+        },
+        connectSavePreparer(listener) {
+            savePreparer = listener;
+            return () => { if (savePreparer === listener) savePreparer = undefined; };
         },
         adoptRead(response, value) {
             const resource = nativeResponses.get(response);
