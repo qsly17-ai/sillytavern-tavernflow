@@ -75,31 +75,44 @@ function equal(a, b) {
 /** A structural delta. Arrays use a single splice when their length changes. */
 export function diffValues(base, next) {
     const ops = [];
-    function visit(a, b, path) {
-        if (equal(a, b)) return;
+    // The parsed trees share no object identities. Recursively comparing every
+    // parent before visiting its children repeats most of the equal work on a
+    // small edit near the end of a long chat. Copy paths only for emitted ops.
+    const path = [];
+    function visit(a, b) {
+        if (a === b) return;
         if (Array.isArray(a) && Array.isArray(b)) {
             if (a.length === b.length) {
-                for (let i = 0; i < a.length; i++) visit(a[i], b[i], [...path, i]);
+                for (let i = 0; i < a.length; i++) {
+                    if (a[i] === b[i]) continue;
+                    path.push(i);
+                    visit(a[i], b[i]);
+                    path.pop();
+                }
                 return;
             }
             let start = 0;
             while (start < Math.min(a.length, b.length) && equal(a[start], b[start])) start++;
             let endA = a.length, endB = b.length;
             while (endA > start && endB > start && equal(a[endA - 1], b[endB - 1])) { endA--; endB--; }
-            ops.push({ op: 'splice', path, index: start, deleteCount: endA - start, items: b.slice(start, endB) });
+            ops.push({ op: 'splice', path: path.slice(), index: start, deleteCount: endA - start, items: b.slice(start, endB) });
             return;
         }
         if (object(a) && object(b)) {
             for (const key of Object.keys(a)) if (!own(b, key)) ops.push({ op: 'delete', path: [...path, key] });
             for (const key of Object.keys(b)) {
                 if (!own(a, key)) ops.push({ op: 'set', path: [...path, key], value: b[key] });
-                else visit(a[key], b[key], [...path, key]);
+                else if (a[key] !== b[key]) {
+                    path.push(key);
+                    visit(a[key], b[key]);
+                    path.pop();
+                }
             }
             return;
         }
-        ops.push({ op: 'set', path, value: b });
+        ops.push({ op: 'set', path: path.slice(), value: b });
     }
-    visit(base, next, []);
+    visit(base, next);
     return ops;
 }
 

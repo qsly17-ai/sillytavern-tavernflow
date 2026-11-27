@@ -1,6 +1,6 @@
 # 来源与许可
 
-清酌 TavernFlow 0.5.0，2026，Susuzi。源码按 GNU Affero General Public License version 3 only（AGPL-3.0-only）提供，完整许可证见 LICENSE。
+清酌 TavernFlow 0.5.1，2026，Susuzi。源码按 GNU Affero General Public License version 3 only（AGPL-3.0-only）提供，完整许可证见 LICENSE。
 
 部分兼容快速路径迁移自同一用户服务器此前开发的 ST 流式性能兼容补丁 st-linear-parser 0.3.0（AGPL-3.0-only），并重新实现为独立模块；没有沿用鸡尾酒的保存协议或内部 HTTP 回源。
 

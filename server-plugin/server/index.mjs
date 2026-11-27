@@ -12,7 +12,7 @@ export const info = {
     name: '清酌 TavernFlow',
     description: 'Independent background delta saves and native-equivalent token batching for SillyTavern 1.19.',
 };
-const VERSION = '0.5.0';
+const VERSION = '0.5.1';
 const HASH = /^[a-f0-9]{64}$/;
 const KINDS = new Set(['settings', 'chat', 'group']);
 const REMOTE_TOKENIZERS = new Set(['qwen2', 'command-r', 'command-a', 'nemo', 'deepseek']);
