@@ -11,7 +11,7 @@
         ['/api/chats/get', '聊天'], ['/api/chats/group/get', '群聊'], ['/api/worldinfo/get', '世界书'],
         ['/api/backgrounds/all', '背景列表'], ['/api/backgrounds/folders', '背景文件夹'],
     ]);
-    const stats = { version: '0.5.0', reads: 0, recovered: 0, retries: 0, waiting: 0, active: 0 };
+    const stats = { version: '0.5.1', reads: 0, recovered: 0, retries: 0, waiting: 0, active: 0 };
     const waiting = new Set();
     const nativeResponses = new WeakMap();
     const chatBodies = new WeakMap();

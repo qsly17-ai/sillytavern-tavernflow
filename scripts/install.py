@@ -66,7 +66,7 @@ HOOKS['public/scripts/request-compression.js'] = [(
 )]
 
 def hooks_for_version(version):
- sets = {'0.4.0': LEGACY_READ_HOOKS, '0.4.1': READ_HOOKS_041, '0.5.0': HOOKS}
+ sets = {'0.4.0': LEGACY_READ_HOOKS, '0.4.1': READ_HOOKS_041, '0.5.0': HOOKS, '0.5.1': HOOKS}
  if version not in sets:
   raise SystemExit('不认识该版本的安装回执，拒绝自动回滚')
  return sets[version]

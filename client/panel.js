@@ -32,7 +32,7 @@ export function mountPanel({ onChange }) {
       <details class="tf-diagnostics"><summary>模块状态</summary><dl></dl></details>
       <details class="tf-diagnostics"><summary>记录一次手机卡顿</summary><p>点开始后正常游玩，最多记录两分钟。只统计当前页前台长任务，不读取正文或上传记录。</p>
       <button class="tf-lag-button menu_button" type="button">开始记录</button><p class="tf-lag-result" role="status"></p></details>
-      <small class="tf-version">0.5.0 · SillyTavern 1.19.0</small></div></details>`;
+      <small class="tf-version">0.5.1 · SillyTavern 1.19.0</small></div></details>`;
     const switches = root.querySelector('.tf-switches');
     const choices = [['enabled', '启用清酌'], ['sourceGuard', '重前端加载减负'], ['startupPreload', '首屏并行预取（试验，下次打开生效）'], ['transport', '后台差量保存'], ['render', '历史文字绘制减负'], ['tokens', '合并并发 Token 计数'], ['helperGeneration', '助手辅助生成减负'], ['fastPaths', '命令与正则快速路径'], ['quickDrawers', '抽屉即时展开'], ['interactions', '预设开关即时响应'], ['lightweightDrag', '轻量拖影（试验）']];
     for (const [key, label] of choices) {

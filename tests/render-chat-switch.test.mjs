@@ -42,7 +42,7 @@ test('disconnected old-chat queue cannot stall current-chat classification', () 
         const oldMessages = Array.from({ length: 80 }, message);
         setChildren(oldMessages);
         instance = installRender();
-        assert.equal(instance.status().pending, 80);
+        assert.equal(instance.status().pending, 75, 'the newest five floors stay outside the queue');
         // Model the subtle ordering: a chunk runs after DOM replacement but
         // before the removal mutation is delivered. Its next node is stale.
         for (const node of oldMessages) node.parentElement = null;
@@ -51,12 +51,12 @@ test('disconnected old-chat queue cannot stall current-chat classification', () 
         runNext();
         assert.ok(tasks.size > 0, 'a stale first pending node still schedules another chunk');
         mutations[0]([{ target: chat, type: 'childList', removedNodes: oldMessages, addedNodes: newMessages }]);
-        assert.equal(instance.status().pending, 7, 'removal purges not-yet-classified old nodes too');
+        assert.equal(instance.status().pending, 2, 'removal purges old nodes; only new historical floors are queued');
         let turns = 0;
         while (tasks.size && turns++ < 30) runNext();
         assert.ok(turns < 30, 'queue drains without polling');
         assert.equal(instance.status().pending, 0);
-        assert.equal(instance.status().tracked, 7);
+        assert.equal(instance.status().tracked, 2);
         instance.dispose();
         assert.equal(tasks.size, 0);
     } finally {

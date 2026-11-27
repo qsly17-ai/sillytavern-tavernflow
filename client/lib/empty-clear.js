@@ -4,6 +4,8 @@ const fingerprints = new Map([
     ['3.2.5', [132, 0xca5a97ed]],           // 707e03f2 (host/plugin.js)
     ['3.2.6', [76, 0x0b2e3f33]],            // c508e5f5 (shared host bundle)
     ['3.2.7', [76, 0x0b2e3f33]],            // 731bab81 (same clear and Set probe)
+    ['3.2.8', [76, 0x692bd2ad]],            // bf109d31 (same clear and Set probe)
+    ['3.2.9', [76, 0xbe76ccbd]],            // 551c015f (same clear and Set probe)
 ]);
 
 export function installEmptyClearGuard(host, context, getVersion, onStats = () => {}) {

@@ -21,6 +21,16 @@ test('same-length text, MVU, swipes, metadata, removal and append all round-trip
     assert.equal(ops[0].op, 'splice');
 });
 
+test('equal-length chats keep independent operation paths across edits in different floors', () => {
+    const base = [ { variable: { hp: 9, mana: 3 } }, { mes: 'old', swipes: ['a', 'b'] }, { mes: 'unchanged' } ];
+    const next = [ { variable: { mana: 3, hp: 8 } }, { mes: 'new', swipes: ['b'] }, { mes: 'unchanged' } ];
+    const ops = diffValues(base, next);
+    assert.deepEqual(ops.map(({ op, path }) => [op, path]), [
+        ['set', [0, 'variable', 'hp']], ['set', [1, 'mes']], ['splice', [1, 'swipes']],
+    ]);
+    assert.deepEqual(applyOps(base, ops), next);
+});
+
 test('all JSON keys survive and cannot modify prototypes', () => {
     const base = JSON.parse('{"__proto__":{"safe":1},"constructor":{"prototype":{"value":2}},"toString":"old"}');
     const next = JSON.parse('{"__proto__":{"safe":3,"polluted":true},"constructor":{"prototype":{"value":4}},"toString":"new"}');

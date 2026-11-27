@@ -1,9 +1,9 @@
-清酌 TavernFlow 0.5.0 · 中文使用说明
+清酌 TavernFlow 0.5.1 · 中文使用说明
 
-酒馆入口：顶部“扩展设置” → “清酌”，确认 0.5.0 及模块状态。
+酒馆入口：顶部“扩展设置” → “清酌”，确认 0.5.1 及模块状态。
 先复制未保存草稿，关闭全部旧酒馆标签页，再重新打开。
 
-开屏、切换聊天、大存档及助手 4.12.2、小白X 3.2.7 适配见本版验收。
+长聊天的最新五楼保持实时；大存档差量减少重复比较。小白X 3.2.8/3.2.9 双空清理已核验。
 面板内可点「记录一次手机卡顿 → 开始记录」，正常玩一轮，再点「结束并查看」。
 若某张卡辅助生成表现异常，可先单独关闭「助手辅助生成减负」对照，不会调整这张卡的历史楼数。
 只显示当前页耗时，不传正文。总长任务与助手前后两种窗口分开；时间重合不代表某插件一定致卡。
@@ -26,13 +26,14 @@ Quick Reply 优先单独下载快捷回复预设，保留原生读取作为后�
 安装：python3 scripts/install.py --host /你的/SillyTavern --apply
 卸载预览：python3 scripts/install.py --host /你的/SillyTavern --rollback
 卸载：python3 scripts/install.py --host /你的/SillyTavern --rollback --apply
-从 0.4.0 或 0.4.1 升级：备份并停止酒馆，用新版安装器回退旧版，再安装新版并重启。
+从 0.4.0、0.4.1 或 0.5.0 升级：备份并停止酒馆，用新版安装器回退旧版，再安装新版并重启。
 已有同名目录须先核验回退，不直接覆盖。
 不要把仓库或ZIP网址填入酒馆扩展安装框，配套服务端需一起安装。
 
 本包包含同版源码、安装副本、测试和脱敏报告。详见：
 README.md
-reports/acceptance-0.5.0.md
+MAINTENANCE.md
+reports/acceptance-0.5.1.md
 reports/acceptance-0.4.md
 reports/runtime-0.4.json
 reports/review-0.4.md

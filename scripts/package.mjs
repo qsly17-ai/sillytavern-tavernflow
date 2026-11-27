@@ -13,10 +13,10 @@ await fs.copyFile(`${root}shared/protocol.mjs`, `${stage}/extension/lib/protocol
 await fs.mkdir(`${stage}/server-plugin`);
 for (const dir of ['server','shared']) await fs.cp(`${root}${dir}`, `${stage}/server-plugin/${dir}`, { recursive: true });
 await fs.writeFile(`${stage}/server-plugin/package.json`, JSON.stringify({ name:'tavern-flow',version,type:'module',main:'server/index.mjs',license:'AGPL-3.0-only' },null,2));
-for (const name of ['README.md','USAGE.zh-CN.txt','LICENSE','NOTICE.md','CHANGELOG.md']) await fs.copyFile(`${root}${name}`, `${stage}/${name}`);
+for (const name of ['README.md','MAINTENANCE.md','USAGE.zh-CN.txt','LICENSE','NOTICE.md','CHANGELOG.md']) await fs.copyFile(`${root}${name}`, `${stage}/${name}`);
 for (const dir of ['extension','server-plugin']) for (const name of ['LICENSE','NOTICE.md']) await fs.copyFile(`${root}${name}`, `${stage}/${dir}/${name}`);
 await fs.mkdir(`${stage}/reports`);
-for (const name of [`acceptance-${version}.md`,`source-sha256-${version}.json`,'acceptance-0.4.1.md','source-sha256-0.4.1.json','acceptance-0.4.md','runtime-0.4.json','review-0.4.md','upstream-0.4.md','source-sha256-0.4.json']) {
+for (const name of [`acceptance-${version}.md`,`source-sha256-${version}.json`,'acceptance-0.5.0.md','source-sha256-0.5.0.json','acceptance-0.4.1.md','source-sha256-0.4.1.json','acceptance-0.4.md','runtime-0.4.json','review-0.4.md','upstream-0.4.md','source-sha256-0.4.json']) {
   await fs.copyFile(`${root}reports/${name}`, `${stage}/reports/${name}`);
 }
 await fs.mkdir(`${stage}/scripts`);
@@ -24,7 +24,7 @@ await fs.copyFile(`${root}scripts/install.py`, `${stage}/scripts/install.py`);
 for (const dir of ['client','server','shared','tests']) await fs.cp(`${root}${dir}`, `${stage}/${dir}`, { recursive: true });
 await fs.copyFile(`${root}package.json`, `${stage}/package.json`);
 await fs.copyFile(`${root}CONTRACT.md`, `${stage}/CONTRACT.md`);
-for (const name of ['check.mjs','package.mjs','startup-http-benchmark.mjs']) await fs.copyFile(`${root}scripts/${name}`, `${stage}/scripts/${name}`);
+for (const name of ['check.mjs','package.mjs','startup-http-benchmark.mjs','diff-benchmark.mjs']) await fs.copyFile(`${root}scripts/${name}`, `${stage}/scripts/${name}`);
 const zip = `${out}tavern-flow-${version}.zip`;
 await fs.rm(zip, { force: true });
 execFileSync('python3', ['-c', `import pathlib,sys,zipfile

@@ -134,7 +134,7 @@ export function installRender({ context = {}, options = {}, onStats = () => {} }
         }
     }
     function schedule(message) {
-        if (disposed || !isMessage(message)) return;
+        if (disposed || tail.has(message) || !isMessage(message)) return;
         pending.add(message);
         scheduleFlush();
     }
@@ -153,7 +153,7 @@ export function installRender({ context = {}, options = {}, onStats = () => {} }
         return Array.from(content.querySelectorAll('*')).every(isSafeTextMarkup);
     };
     function evaluate(message) {
-        if (!isMessage(message)) { forget(message); return; }
+        if (tail.has(message) || !isMessage(message)) { forget(message); return; }
         let record = records.get(message);
         if (!record) {
             while (records.size >= config.maxMessages) forget(records.keys().next().value);
@@ -178,20 +178,18 @@ export function installRender({ context = {}, options = {}, onStats = () => {} }
             }
         }
         if (!isPlain) return;
-        // Selection reads can synchronously settle a dirty host document. Only
-        // ask about selection when every other condition permits deferral.
+        // Check the cached geometry first. Editor, focus and selection checks
+        // are only useful for a record that could actually be deferred.
         const candidate = canDeferText({
             eligible: true,
             near: record.near,
-            tail: tail.has(message),
-            editing: hasMessageEditor(message, content),
-            focused: content.contains(document.activeElement),
-            selected: false,
+            tail: false,
             height: record.height,
             measuredVersion: record.measuredVersion,
             layoutVersion,
         });
-        const defer = candidate && !selected(content);
+        const defer = candidate && !hasMessageEditor(message, content)
+            && !content.contains(document.activeElement) && !selected(content);
         if (defer && !record.deferred) {
             // ResizeObserver supplies content-box dimensions. Padding/borders are
             // not included twice, and native scroll anchoring remains in charge.
@@ -231,14 +229,14 @@ export function installRender({ context = {}, options = {}, onStats = () => {} }
             if (isMessage(node)) next.add(node);
             node = node.previousElementSibling;
         }
-        for (const message of tail) if (!next.has(message)) schedule(message);
-        for (const message of next) {
-            // A newly generated/edited last message must never wait for idle time.
-            const record = records.get(message);
-            if (record) restore(record);
-            schedule(message);
-        }
+        const previous = tail;
         tail = next;
+        for (const message of next) {
+            // Recent floors render natively: no classification, geometry or
+            // pending idle work. A floor brought back by deletion is live now.
+            if (!previous.has(message)) forget(message);
+        }
+        for (const message of previous) if (!next.has(message)) schedule(message);
     }
     const invalidateMeasurements = () => {
         layoutVersion++;
@@ -293,40 +291,49 @@ export function installRender({ context = {}, options = {}, onStats = () => {} }
     });
     const mutations = new view.MutationObserver(entries => {
         if (disposed) return;
-        let changedChildren = false;
+        const added = [], changed = new Set(), seen = new Set();
+        let changedChildren = false, changedLayout = false;
         for (const entry of entries) {
-            if (entry.target === chat) {
-                if (entry.type === 'attributes') invalidateMeasurements();
+            const target = entry.target;
+            if (target === chat) {
+                if (entry.type === 'attributes') changedLayout = true;
                 if (entry.type !== 'childList') continue;
                 changedChildren = true;
                 for (const node of entry.removedNodes) if (node.parentElement !== chat) forget(node);
-                for (const node of entry.addedNodes) if (isMessage(node)) schedule(node);
+                for (const node of entry.addedNodes) if (isMessage(node)) added.push(node);
                 continue;
             }
-            const message = messageOf(entry.target);
-            if (!message) continue;
-            const record = records.get(message);
             // Inline styles on our .mes_text are our own writes. A descendant
             // style/markup mutation invalidates the pure-text eligibility check.
-            if (entry.type === 'attributes' && entry.attributeName === 'style' && entry.target.classList.contains('mes_text')) continue;
+            if (entry.type === 'attributes' && entry.attributeName === 'style' && target.classList.contains('mes_text')) continue;
+            if (seen.has(target)) continue;
+            seen.add(target);
+            const message = messageOf(target);
+            if (message && !tail.has(message)) changed.add(message);
+        }
+        if (changedChildren) updateTail();
+        if (changedLayout) invalidateMeasurements();
+        for (const message of added) schedule(message);
+        for (const message of changed) {
+            if (tail.has(message)) continue;
+            const record = records.get(message);
             if (record) {
                 restore(record);
                 record.dirty = true;
                 record.measuredVersion = -1;
                 // Re-observe also delivers an initial size when an edit preserves
                 // the same height. Otherwise that message would stay live forever.
-                if (record.eligible) { sizes.unobserve(record.content); sizes.observe(record.content); }
+                if (record.eligible && !changedLayout) { sizes.unobserve(record.content); sizes.observe(record.content); }
             }
             schedule(message);
         }
-        if (changedChildren) updateTail();
     });
     mutations.observe(chat, { subtree: true, childList: true, characterData: true, attributes: true,
         attributeFilter: ['class', 'style', 'hidden', 'contenteditable', 'role', 'tabindex', 'data-tf-keep-live', 'data-stir-enhanced'] });
     sizes.observe(chat);
+    updateTail();
     // A bounded initial registration, no full-history DOM rectangle measurements.
     for (let i = Math.max(0, chat.children.length - config.maxMessages); i < chat.children.length; i++) schedule(chat.children[i]);
-    updateTail();
     checkFonts();
     const onSelection = () => {
         // With no deferred content there is nothing to reveal. A future

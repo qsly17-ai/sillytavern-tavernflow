@@ -70,6 +70,19 @@ function harness({ embedded = false } = {}) {
         font: value => { signature = value; },
         measure: (index, height = 200) => observers.sizes([{ target: messages[index].content, contentRect: { height } }]),
         near: (index, isIntersecting) => observers.intersection([{ target: messages[index].content, isIntersecting }]),
+        replaceChildren(indices) {
+            const next = indices.map(index => messages[index]);
+            const addedNodes = next.filter(message => !chat.children.includes(message));
+            const removedNodes = chat.children.filter(message => !next.includes(message));
+            for (const message of removedNodes) message.parentElement = null;
+            next.forEach((message, index) => {
+                message.parentElement = chat;
+                message.previousElementSibling = next[index - 1] ?? null;
+            });
+            chat.children = next;
+            chat.lastElementChild = next.at(-1) ?? null;
+            observers.mutations([{ target: chat, type: 'childList', addedNodes, removedNodes }]);
+        },
         drain() {
             let turns = 0;
             while (tasks.size && turns++ < 30) {
@@ -95,6 +108,23 @@ test('embedded-only chat never reads selection or computed typography', () => {
         h.events.get('selectionchange')();
         h.hostEvents.get('settings')();
         assert.deepEqual(h.reads(), { selection: 0, style: 0 });
+    } finally { h.close(); }
+});
+
+test('deleting newer floors immediately reveals a former historical floor without idle work', () => {
+    const h = harness();
+    try {
+        h.drain(); h.measure(0); h.near(0, false); h.drain();
+        const content = h.messages[0].content;
+        assert.equal(content.style.getPropertyValue('content-visibility'), 'auto');
+        h.replaceChildren([0, 1, 2, 3, 7]);
+        assert.equal(content.style.getPropertyValue('content-visibility'), '');
+        assert.equal(h.instance.status().pending, 0);
+        h.replaceChildren([0, 1, 2, 3, 4, 5, 6, 7]);
+        h.drain(); h.near(0, false); h.drain();
+        assert.equal(content.style.getPropertyValue('content-visibility'), '', 'geometry from before the transition is stale');
+        h.measure(0); h.drain();
+        assert.equal(content.style.getPropertyValue('content-visibility'), 'auto');
     } finally { h.close(); }
 });
 
