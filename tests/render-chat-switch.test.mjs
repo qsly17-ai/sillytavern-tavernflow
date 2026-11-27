@@ -32,10 +32,10 @@ test('disconnected old-chat queue cannot stall current-chat classification', () 
     };
     const document = { defaultView: view, getElementById: () => chat, addEventListener: noOp, removeEventListener: noOp };
     Object.defineProperty(globalThis, 'document', { configurable: true, value: document });
-    const runNext = () => {
+    const runNext = (deadline = { timeRemaining: () => 10 }) => {
         const [id, task] = tasks.entries().next().value;
         tasks.delete(id);
-        task({ timeRemaining: () => 10 });
+        task(deadline);
     };
     let instance;
     try {
@@ -43,6 +43,9 @@ test('disconnected old-chat queue cannot stall current-chat classification', () 
         setChildren(oldMessages);
         instance = installRender();
         assert.equal(instance.status().pending, 75, 'the newest five floors stay outside the queue');
+        runNext({ didTimeout: true, timeRemaining: () => 0 });
+        const classified = instance.status().tracked;
+        assert.ok(classified > 1 && classified <= 5, 'a busy browser advances without exceeding the simulated time budget');
         // Model the subtle ordering: a chunk runs after DOM replacement but
         // before the removal mutation is delivered. Its next node is stale.
         for (const node of oldMessages) node.parentElement = null;

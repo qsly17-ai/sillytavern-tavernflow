@@ -6,6 +6,7 @@ function harness({ embedded = false } = {}) {
     const previous = Object.getOwnPropertyDescriptor(globalThis, 'document');
     const tasks = new Map(), events = new Map(), hostEvents = new Map();
     let nextTask = 0, selectionReads = 0, styleReads = 0;
+    let lastReport;
     let selectedContent = null, focusedContent = null;
     let signature = 'initial';
     const observers = {};
@@ -61,9 +62,10 @@ function harness({ embedded = false } = {}) {
     Object.defineProperty(globalThis, 'document', { configurable: true, value: document });
     const instance = installRender({ context: { event_types: { SETTINGS_UPDATED: 'settings' }, eventSource: {
         on: (name, callback) => hostEvents.set(name, callback), removeListener: name => hostEvents.delete(name),
-    } } });
+    } }, onStats: status => { lastReport = status; } });
     return {
         instance, messages, observers, events, hostEvents,
+        lastReport: () => lastReport,
         reads: () => ({ selection: selectionReads, style: styleReads }),
         select: content => { selectedContent = content; },
         focus: content => { focusedContent = content; },
@@ -117,9 +119,11 @@ test('deleting newer floors immediately reveals a former historical floor withou
         h.drain(); h.measure(0); h.near(0, false); h.drain();
         const content = h.messages[0].content;
         assert.equal(content.style.getPropertyValue('content-visibility'), 'auto');
+        assert.equal(h.lastReport().deferred, 1);
         h.replaceChildren([0, 1, 2, 3, 7]);
         assert.equal(content.style.getPropertyValue('content-visibility'), '');
         assert.equal(h.instance.status().pending, 0);
+        assert.equal(h.lastReport().deferred, 0, 'report the reveal even when no classification is queued');
         h.replaceChildren([0, 1, 2, 3, 4, 5, 6, 7]);
         h.drain(); h.near(0, false); h.drain();
         assert.equal(content.style.getPropertyValue('content-visibility'), '', 'geometry from before the transition is stale');

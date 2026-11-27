@@ -211,7 +211,10 @@ export function installRender({ context = {}, options = {}, onStats = () => {} }
         let count = 0;
         const start = view.performance.now();
         while (pending.size && count < 24) {
-            if (count && (view.performance.now() - start > 5 || (deadline?.timeRemaining && deadline.timeRemaining() < 1))) break;
+            // Timed-out idle callbacks report zero timeRemaining. Still let
+            // them do one bounded chunk when a busy tab has no idle period.
+            if (count && (view.performance.now() - start >= 5
+                || (!deadline?.didTimeout && deadline?.timeRemaining && deadline.timeRemaining() < 1))) break;
             const message = pending.values().next().value;
             pending.delete(message);
             evaluate(message);
@@ -291,6 +294,7 @@ export function installRender({ context = {}, options = {}, onStats = () => {} }
     });
     const mutations = new view.MutationObserver(entries => {
         if (disposed) return;
+        const previousDeferred = deferred;
         const added = [], changed = new Set(), seen = new Set();
         let changedChildren = false, changedLayout = false;
         for (const entry of entries) {
@@ -327,6 +331,9 @@ export function installRender({ context = {}, options = {}, onStats = () => {} }
             }
             schedule(message);
         }
+        // Removing a deferred floor or moving it into the live tail can
+        // change the panel count without scheduling any classification.
+        if (!pending.size && deferred !== previousDeferred) report();
     });
     mutations.observe(chat, { subtree: true, childList: true, characterData: true, attributes: true,
         attributeFilter: ['class', 'style', 'hidden', 'contenteditable', 'role', 'tabindex', 'data-tf-keep-live', 'data-stir-enhanced'] });
